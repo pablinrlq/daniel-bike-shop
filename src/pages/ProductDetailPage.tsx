@@ -8,11 +8,12 @@ import { ShoppingCart, ArrowLeft, Truck, Shield, RotateCcw, AlertTriangle } from
 import { toast } from 'sonner';
 import ProductCard from '@/components/ProductCard';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useStoreSettings } from '@/hooks/useStoreSettings';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import WishlistButton from '@/components/WishlistButton';
 import ProductReviews from '@/components/ProductReviews';
+import SEO from '@/components/SEO';
 
 const ProductDetailPage = () => {
   const { id } = useParams();
@@ -79,6 +80,7 @@ const ProductDetailPage = () => {
 
     addToCart({
       id: product.id,
+      slug: product.slug,
       name: product.name,
       description: product.description,
       price: product.price,
@@ -110,6 +112,12 @@ const ProductDetailPage = () => {
 
   return (
     <div className="min-h-screen flex flex-col">
+      <SEO
+        title={product.name}
+        description={product.description?.slice(0, 160) || `${product.name} — Daniel Bike Shop`}
+        canonical={`https://ride-sell.vercel.app/produto/${product.slug || product.id}`}
+      />
+      <ProductJsonLd product={product} />
       <Header />
       <main className="flex-1 py-8">
         <div className="container mx-auto px-4">
@@ -134,6 +142,9 @@ const ProductDetailPage = () => {
                 <img
                   src={images[selectedImage]}
                   alt={product.name}
+                  loading="eager"
+                  fetchPriority="high"
+                  decoding="async"
                   className="w-full h-full object-cover"
                 />
                 {discount > 0 && (
@@ -159,7 +170,7 @@ const ProductDetailPage = () => {
                           : 'border-border hover:border-primary/50'
                       }`}
                     >
-                      <img src={img} alt="" className="w-full h-full object-cover" />
+                      <img src={img} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                     </button>
                   ))}
                 </div>
@@ -282,6 +293,47 @@ const ProductDetailPage = () => {
       <Footer />
     </div>
   );
+};
+
+/**
+ * Injeta JSON-LD do tipo Product no <head> para rich snippets do Google.
+ * Schema.org/Product — preço, disponibilidade, imagens, marca.
+ */
+const ProductJsonLd = ({ product }: { product: any }) => {
+  useEffect(() => {
+    const id = `jsonld-product-${product.id}`;
+    let script = document.getElementById(id) as HTMLScriptElement | null;
+    if (!script) {
+      script = document.createElement('script');
+      script.type = 'application/ld+json';
+      script.id = id;
+      document.head.appendChild(script);
+    }
+    script.textContent = JSON.stringify({
+      '@context': 'https://schema.org/',
+      '@type': 'Product',
+      name: product.name,
+      description: product.description,
+      image: product.images?.length ? product.images : [product.image],
+      sku: product.id,
+      brand: product.brand ? { '@type': 'Brand', name: product.brand } : undefined,
+      offers: {
+        '@type': 'Offer',
+        priceCurrency: 'BRL',
+        price: product.price,
+        availability:
+          product.stock > 0
+            ? 'https://schema.org/InStock'
+            : 'https://schema.org/OutOfStock',
+        url: `https://ride-sell.vercel.app/produto/${product.slug || product.id}`,
+      },
+    });
+    return () => {
+      script?.remove();
+    };
+  }, [product]);
+
+  return null;
 };
 
 export default ProductDetailPage;

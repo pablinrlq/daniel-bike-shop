@@ -2,6 +2,7 @@ import { Link, useLocation } from "react-router-dom";
 import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Home, ArrowLeft } from "lucide-react";
+import SEO from "@/components/SEO";
 
 const NotFound = () => {
   const location = useLocation();
@@ -12,6 +13,7 @@ const NotFound = () => {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
+      <SEO title="Página não encontrada" noIndex />
       <div className="max-w-md text-center">
         <p className="mb-2 text-sm font-semibold uppercase tracking-wider text-primary">
           Erro 404

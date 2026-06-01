@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Loader2 } from 'lucide-react';
+import SEO from '@/components/SEO';
 
 const ProductsPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -69,10 +70,19 @@ const ProductsPage = () => {
 
   const isLoading = productsLoading || categoriesLoading;
 
+  const pageTitle = categoryParam !== 'todos'
+    ? `${categoryOptions.find((c) => c.value === categoryParam)?.label || 'Produtos'}`
+    : 'Produtos';
+
   return (
     <div className="min-h-screen flex flex-col">
+      <SEO
+        title={pageTitle}
+        description="Catálogo completo de bicicletas, peças e acessórios. Filtros por categoria e ordenação por preço."
+        canonical={`https://ride-sell.vercel.app/produtos${categoryParam !== 'todos' ? `?categoria=${categoryParam}` : ''}`}
+      />
       <Header />
-      <main className="flex-1 py-8">
+      <main id="main-content" className="flex-1 py-8">
         <div className="container mx-auto px-4">
           <div className="mb-8">
             <h1 className="text-3xl md:text-4xl font-bold">Nossos Produtos</h1>

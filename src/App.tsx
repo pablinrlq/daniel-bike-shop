@@ -63,6 +63,9 @@ const App = () => (
               <Toaster />
               <Sonner />
               <BrowserRouter>
+                <a href="#main-content" className="skip-link">
+                  Pular para o conteúdo
+                </a>
                 <ScrollToTop />
                 <Suspense fallback={<RouteFallback />}>
                   <Routes>

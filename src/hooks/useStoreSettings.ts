@@ -27,11 +27,12 @@ export const useStoreSettings = () => {
         .from('store_settings')
         .select('*')
         .limit(1)
-        .single();
+        .maybeSingle();
 
       if (error) throw error;
-      return data as StoreSettings;
+      return (data as StoreSettings | null) ?? null;
     },
+    staleTime: 5 * 60 * 1000,
   });
 };
 

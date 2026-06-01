@@ -1,0 +1,17 @@
+{
+  "name": "Daniel Bike Shop",
+  "short_name": "Daniel Bike",
+  "description": "Loja especializada em bicicletas, peças e acessórios em Belo Horizonte.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#121110",
+  "theme_color": "#121110",
+  "lang": "pt-BR",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "any",
+      "type": "image/x-icon"
+    }
+  ]
+}

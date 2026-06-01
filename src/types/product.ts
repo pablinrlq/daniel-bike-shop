@@ -5,7 +5,7 @@ export interface Product {
   description: string;
   price: number;
   originalPrice?: number;
-  category: 'bicicletas' | 'pecas' | 'acessorios';
+  category: 'bicicletas' | 'pecas' | 'acessorios' | string;
   image: string;
   stock: number;
   featured?: boolean;
