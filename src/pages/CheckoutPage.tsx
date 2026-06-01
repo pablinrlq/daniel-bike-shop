@@ -209,8 +209,13 @@ const CheckoutPage = () => {
     return `https://wa.me/${WHATSAPP_NUMBER}?text=${message}`;
   };
 
+  useEffect(() => {
+    if (items.length === 0 && !orderComplete) {
+      navigate('/carrinho', { replace: true });
+    }
+  }, [items.length, orderComplete, navigate]);
+
   if (items.length === 0 && !orderComplete) {
-    navigate('/carrinho');
     return null;
   }
 
@@ -279,7 +284,7 @@ const CheckoutPage = () => {
             <div className="flex flex-col gap-3">
               {whatsappLink && (
                 <a href={whatsappLink} target="_blank" rel="noopener noreferrer">
-                  <Button size="lg" className="w-full bg-[hsl(142,70%,45%)] hover:bg-[hsl(142,70%,40%)] text-primary-foreground">
+                  <Button size="lg" className="w-full bg-[#25D366] hover:bg-[#20BA5A] text-white">
                     <MessageCircle className="mr-2 h-5 w-5" />
                     Enviar Pedido via WhatsApp
                   </Button>

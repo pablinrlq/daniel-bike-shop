@@ -1,73 +1,66 @@
-# Welcome to your Lovable project
+# Daniel Bike Shop
 
-## Project info
+E-commerce especializado em bicicletas, peças e acessórios — Belo Horizonte/MG.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+## Stack
 
-## How can I edit this code?
+- Vite + React 18 + TypeScript
+- Tailwind CSS + shadcn-ui (Radix)
+- TanStack Query
+- Supabase (auth, banco, storage, edge functions)
+- Integração Bling (ERP — produtos, pedidos, NF-e)
 
-There are several ways of editing your application.
+## Rodando localmente
 
-**Use Lovable**
-
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
-
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
+Pré-requisitos: Node.js 20+ e npm.
 
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+# 1. instalar dependências
+npm install
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+# 2. configurar variáveis de ambiente
+cp .env.example .env
+# preencher .env com as credenciais reais do Supabase
 
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+# 3. dev server
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+A app sobe em `http://localhost:8080`.
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+## Scripts
 
-**Use GitHub Codespaces**
+| Comando            | Descrição                                  |
+| ------------------ | ------------------------------------------ |
+| `npm run dev`      | Dev server com HMR                         |
+| `npm run build`    | Build de produção                          |
+| `npm run preview`  | Preview do build de produção               |
+| `npm run lint`     | ESLint                                     |
+| `npm run test`     | Vitest (uma execução)                      |
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+## Estrutura
 
-## What technologies are used for this project?
+```
+src/
+├── components/        UI components (incl. shadcn em ui/)
+├── contexts/          Auth, Cart, Wishlist
+├── hooks/             Queries customizadas
+├── integrations/      Cliente Supabase
+├── pages/             Rotas públicas e /admin
+└── lib/               Utilitários
 
-This project is built with:
+supabase/
+├── functions/         Edge Functions (Bling, admin)
+└── migrations/        Schema SQL + RLS
+```
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+## Segurança
 
-## How can I deploy this project?
+- Nunca commitar `.env`. Use `.env.example` como referência.
+- A `VITE_SUPABASE_PUBLISHABLE_KEY` é a chave **anon** do Supabase (pode ir para o cliente). A `SUPABASE_SERVICE_ROLE_KEY` fica **apenas em edge functions**.
+- Toda tabela tem RLS habilitado; políticas estão em `supabase/migrations/`.
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+## Deploy
 
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+Deploy automático via Vercel a partir do branch `main`.
+Configurar as variáveis de ambiente no painel da Vercel antes do primeiro deploy.

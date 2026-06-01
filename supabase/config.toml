@@ -1,14 +1,20 @@
 project_id = "rqpgexsonigkrwhdlznm"
 
+# Bling OAuth callback é chamado pelo servidor da Bling — não há JWT do Supabase.
 [functions.bling-oauth-callback]
 verify_jwt = false
 
+# Demais funções Bling exigem usuário autenticado.
+# A validação de papel admin/editor acontece dentro da função.
 [functions.bling-check-connection]
-verify_jwt = false
+verify_jwt = true
 
 [functions.bling-sync-products]
-verify_jwt = false
+verify_jwt = true
 
+# Criação de pedido e validação de estoque acontecem no checkout
+# (usuário anônimo). Proteção contra abuso é feita dentro da função
+# (idempotência + validação de payload).
 [functions.bling-create-order]
 verify_jwt = false
 

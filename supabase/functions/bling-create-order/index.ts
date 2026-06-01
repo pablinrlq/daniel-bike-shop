@@ -36,6 +36,37 @@ serve(async (req) => {
 
     if (orderError || !order) throw new Error(`Order not found: ${orderId}`);
 
+    // Idempotência: se já existe um bling_order para este order, retornar o existente
+    // ao invés de criar duplicata na Bling/NF-e (que custaria $$ ao lojista).
+    const { data: existingBlingOrder } = await supabase
+      .from('bling_orders')
+      .select('*')
+      .eq('order_id', orderId)
+      .maybeSingle();
+
+    if (existingBlingOrder) {
+      console.log('Order already processed in Bling, returning existing:', existingBlingOrder.bling_order_id);
+      return new Response(
+        JSON.stringify({
+          success: true,
+          alreadyProcessed: true,
+          blingOrderId: existingBlingOrder.bling_order_id,
+          orderNumber: existingBlingOrder.bling_order_id,
+          nfeId: existingBlingOrder.bling_nfe_id || '',
+          nfeNumber: existingBlingOrder.bling_nfe_number || '',
+          nfeIssued: !!existingBlingOrder.bling_nfe_number,
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+      );
+    }
+
+    // Só processar pedidos recentes (até 24h) — limita janela de abuso
+    // por reuso de orderIds vazados.
+    const orderAgeMs = Date.now() - new Date(order.created_at).getTime();
+    if (orderAgeMs > 24 * 60 * 60 * 1000) {
+      throw new Error('Order is too old to be processed automatically');
+    }
+
     const { data: items } = await supabase
       .from('order_items')
       .select('*, products(sku)')
