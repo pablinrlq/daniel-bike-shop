@@ -8,7 +8,13 @@ E-commerce especializado em bicicletas, peças e acessórios — Belo Horizonte/
 - Tailwind CSS + shadcn-ui (Radix)
 - TanStack Query
 - Supabase (auth, banco, storage, edge functions)
+- Mercado Pago (Pix + cartão + webhook)
+- Resend (e-mail transacional)
 - Integração Bling (ERP — produtos, pedidos, NF-e)
+
+## Setup completo (Supabase novo, MP, Resend, Vercel)
+
+Veja **[SETUP.md](./SETUP.md)** — guia passo a passo do zero.
 
 ## Rodando localmente
 

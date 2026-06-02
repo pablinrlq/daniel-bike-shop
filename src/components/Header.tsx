@@ -1,8 +1,9 @@
 import { Link, useLocation } from 'react-router-dom';
-import { ShoppingCart, Menu, X, Search, Heart } from 'lucide-react';
+import { ShoppingCart, Menu, X, Search, Heart, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useCart } from '@/contexts/CartContext';
 import { useWishlist } from '@/contexts/WishlistContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { useEffect, useState } from 'react';
 import logo from '@/assets/logo.png';
 import SearchBar from '@/components/SearchBar';
@@ -10,6 +11,7 @@ import SearchBar from '@/components/SearchBar';
 const Header = () => {
   const { itemCount } = useCart();
   const { wishlistCount } = useWishlist();
+  const { user } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const location = useLocation();
@@ -23,8 +25,21 @@ const Header = () => {
   ];
 
   const isActive = (path: string) => {
-    if (path === '/') return location.pathname === '/';
-    return location.pathname.includes(path.split('?')[0]);
+    const [targetPath, targetQuery] = path.split('?');
+    if (targetPath === '/') return location.pathname === '/';
+
+    const currentPath = location.pathname;
+    const onSamePath =
+      currentPath === targetPath || currentPath.startsWith(`${targetPath}/`);
+    if (!onSamePath) return false;
+
+    if (!targetQuery) return true;
+    const targetParams = new URLSearchParams(targetQuery);
+    const currentParams = new URLSearchParams(location.search);
+    for (const [key, value] of targetParams) {
+      if (currentParams.get(key) !== value) return false;
+    }
+    return true;
   };
 
   // Fecha menu mobile ao trocar de rota
@@ -97,6 +112,16 @@ const Header = () => {
             >
               <Search className="h-5 w-5" aria-hidden="true" />
             </Button>
+
+            {/* Account */}
+            <Link
+              to={user ? '/conta' : '/login'}
+              aria-label={user ? 'Minha conta' : 'Entrar na minha conta'}
+            >
+              <Button variant="ghost" size="icon">
+                <User className="h-5 w-5" aria-hidden="true" />
+              </Button>
+            </Link>
 
             {/* Wishlist */}
             <Link

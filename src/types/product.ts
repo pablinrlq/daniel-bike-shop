@@ -16,6 +16,8 @@ export interface CartItem {
   quantity: number;
 }
 
+import type { AppliedCoupon } from '@/lib/coupon';
+
 export interface CartContextType {
   items: CartItem[];
   addToCart: (product: Product) => void;
@@ -24,4 +26,7 @@ export interface CartContextType {
   clearCart: () => void;
   total: number;
   itemCount: number;
+  coupon: AppliedCoupon | null;
+  applyCoupon: (coupon: AppliedCoupon | null) => void;
+  discount: number;
 }

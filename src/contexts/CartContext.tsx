@@ -1,9 +1,11 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
 import { Product, CartItem, CartContextType } from '@/types/product';
+import { AppliedCoupon, calculateDiscount, isCouponEligible } from '@/lib/coupon';
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
 const STORAGE_KEY = 'dbs-cart-v1';
+const COUPON_STORAGE_KEY = 'dbs-coupon-v1';
 const MAX_QUANTITY_PER_ITEM = 99;
 
 type StoredCartItem = { productId: string; product: Product; quantity: number };
@@ -38,20 +40,46 @@ const saveCart = (items: CartItem[]) => {
   }
 };
 
+const loadCoupon = (): AppliedCoupon | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(COUPON_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AppliedCoupon;
+    if (!parsed || typeof parsed.code !== 'string') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+};
+
+const saveCoupon = (coupon: AppliedCoupon | null) => {
+  if (typeof window === 'undefined') return;
+  try {
+    if (coupon) window.localStorage.setItem(COUPON_STORAGE_KEY, JSON.stringify(coupon));
+    else window.localStorage.removeItem(COUPON_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+};
+
 export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [items, setItems] = useState<CartItem[]>(() => loadCart());
+  const [coupon, setCouponState] = useState<AppliedCoupon | null>(() => loadCoupon());
 
   useEffect(() => {
     saveCart(items);
   }, [items]);
 
-  // Sincroniza entre abas
+  useEffect(() => {
+    saveCoupon(coupon);
+  }, [coupon]);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const onStorage = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY) {
-        setItems(loadCart());
-      }
+      if (e.key === STORAGE_KEY) setItems(loadCart());
+      if (e.key === COUPON_STORAGE_KEY) setCouponState(loadCoupon());
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
@@ -90,13 +118,46 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const clearCart = useCallback(() => {
     setItems([]);
+    setCouponState(null);
   }, []);
 
-  const total = items.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
-  const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
+  const applyCoupon = useCallback((next: AppliedCoupon | null) => {
+    setCouponState(next);
+  }, []);
+
+  const subtotal = useMemo(
+    () => items.reduce((sum, item) => sum + item.product.price * item.quantity, 0),
+    [items],
+  );
+  const itemCount = useMemo(
+    () => items.reduce((sum, item) => sum + item.quantity, 0),
+    [items],
+  );
+
+  // Auto-removes a coupon that became ineligible (e.g. user reduced quantity below min order)
+  useEffect(() => {
+    if (coupon && !isCouponEligible(coupon, subtotal)) {
+      setCouponState(null);
+    }
+  }, [coupon, subtotal]);
+
+  const discount = useMemo(() => calculateDiscount(coupon, subtotal), [coupon, subtotal]);
 
   return (
-    <CartContext.Provider value={{ items, addToCart, removeFromCart, updateQuantity, clearCart, total, itemCount }}>
+    <CartContext.Provider
+      value={{
+        items,
+        addToCart,
+        removeFromCart,
+        updateQuantity,
+        clearCart,
+        total: subtotal,
+        itemCount,
+        coupon,
+        applyCoupon,
+        discount,
+      }}
+    >
       {children}
     </CartContext.Provider>
   );

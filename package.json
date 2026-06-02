@@ -1,8 +1,12 @@
 {
-  "name": "vite_react_shadcn_ts",
+  "name": "daniel-bike-shop",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
+  "packageManager": "npm@10.0.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",

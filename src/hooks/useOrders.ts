@@ -20,6 +20,8 @@ export interface CreateOrderData {
   customer_zip: string;
   subtotal: number;
   shipping_cost: number;
+  discount_amount?: number;
+  coupon_code?: string;
   total: number;
   notes?: string;
   items: OrderItem[];
@@ -30,12 +32,16 @@ export const useCreateOrder = () => {
 
   return useMutation({
     mutationFn: async (orderData: CreateOrderData) => {
-      const { items, ...orderInfo } = orderData;
+      const { items, discount_amount: _ignoredDiscount, total: _ignoredTotal, ...orderInfo } = orderData;
+      // discount_amount and total are recomputed by a DB trigger
+      // based on the coupon_code — see migration phase2_coupon_server_side.
 
-      // Create order in database
+      // Attach the current user (if any) so the customer can see their order later
+      const { data: { user } } = await supabase.auth.getUser();
+
       const { data: order, error: orderError } = await supabase
         .from('orders')
-        .insert(orderInfo)
+        .insert({ ...orderInfo, user_id: user?.id ?? null })
         .select()
         .single();
 
@@ -53,6 +59,11 @@ export const useCreateOrder = () => {
 
       if (itemsError) throw itemsError;
 
+      // Fire-and-forget: notify the customer the order was received
+      supabase.functions
+        .invoke('send-order-email', { body: { orderId: order.id, kind: 'created' } })
+        .catch((e) => console.error('send-order-email (created) failed:', e));
+
       // Process order with Bling (create order + NF-e)
       try {
         const { data: blingResult, error: blingError } = await supabase.functions.invoke('bling-create-order', {
@@ -62,15 +73,13 @@ export const useCreateOrder = () => {
         if (blingError) {
           console.error('Bling processing error:', blingError);
           // Order is created, but Bling sync failed - don't fail the order
-        } else {
-          console.log('Bling processing result:', blingResult);
-          // Attach Bling data to the order for WhatsApp message
+        } else if (blingResult) {
           return {
             ...order,
-            blingOrderId: blingResult?.blingOrderId,
-            blingOrderNumber: blingResult?.orderNumber,
-            nfeIssued: blingResult?.nfeIssued,
-            nfeNumber: blingResult?.nfeNumber,
+            blingOrderId: blingResult.blingOrderId,
+            blingOrderNumber: blingResult.orderNumber,
+            nfeIssued: blingResult.nfeIssued,
+            nfeNumber: blingResult.nfeNumber,
           };
         }
       } catch (e) {

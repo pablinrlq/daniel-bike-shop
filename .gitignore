@@ -20,6 +20,9 @@ dist-ssr
 # Local Claude Code config
 .claude/
 
+# Agent skills (instalados localmente via `npx skills add`)
+.agents/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -4,13 +4,9 @@ import { Input } from '@/components/ui/input';
 import { Tag, Loader2, X, CheckCircle } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { AppliedCoupon, calculateDiscount } from '@/lib/coupon';
 
-export interface AppliedCoupon {
-  code: string;
-  discountType: 'percentage' | 'fixed';
-  discountValue: number;
-  minOrderValue: number;
-}
+export type { AppliedCoupon };
 
 interface CouponInputProps {
   orderTotal: number;
@@ -18,69 +14,54 @@ interface CouponInputProps {
   onApplyCoupon: (coupon: AppliedCoupon | null) => void;
 }
 
+interface ValidateCouponResponse {
+  valid: boolean;
+  error?: string;
+  message?: string;
+  code?: string;
+  discountType?: 'percentage' | 'fixed';
+  discountValue?: number;
+  minOrderValue?: number;
+  discountAmount?: number;
+}
+
 const CouponInput = ({ orderTotal, appliedCoupon, onApplyCoupon }: CouponInputProps) => {
   const [code, setCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
   const handleApply = async () => {
-    if (!code.trim()) {
+    const trimmed = code.trim();
+    if (!trimmed) {
       toast.error('Digite um código de cupom');
       return;
     }
 
     setIsLoading(true);
-
     try {
-      const { data, error } = await supabase
-        .from('discount_coupons')
-        .select('*')
-        .eq('code', code.toUpperCase().trim())
-        .eq('is_active', true)
-        .maybeSingle();
+      const { data, error } = await supabase.functions.invoke<ValidateCouponResponse>(
+        'validate-coupon',
+        { body: { code: trimmed, subtotal: orderTotal } },
+      );
 
       if (error) throw error;
 
-      if (!data) {
-        toast.error('Cupom inválido ou expirado');
-        return;
-      }
-
-      // Check expiration
-      if (data.expires_at && new Date(data.expires_at) < new Date()) {
-        toast.error('Este cupom expirou');
-        return;
-      }
-
-      // Check start date
-      if (data.starts_at && new Date(data.starts_at) > new Date()) {
-        toast.error('Este cupom ainda não está ativo');
-        return;
-      }
-
-      // Check max uses
-      if (data.max_uses && data.current_uses >= data.max_uses) {
-        toast.error('Este cupom atingiu o limite de uso');
-        return;
-      }
-
-      // Check minimum order value
-      if (data.min_order_value && orderTotal < Number(data.min_order_value)) {
-        toast.error(`Pedido mínimo de R$ ${Number(data.min_order_value).toFixed(2)} para usar este cupom`);
+      if (!data || !data.valid || !data.code || !data.discountType || typeof data.discountValue !== 'number') {
+        toast.error(data?.message || 'Cupom inválido ou expirado');
         return;
       }
 
       onApplyCoupon({
         code: data.code,
-        discountType: data.discount_type as 'percentage' | 'fixed',
-        discountValue: Number(data.discount_value),
-        minOrderValue: Number(data.min_order_value) || 0,
+        discountType: data.discountType,
+        discountValue: data.discountValue,
+        minOrderValue: data.minOrderValue ?? 0,
       });
 
       toast.success('Cupom aplicado com sucesso!');
       setCode('');
-    } catch (error) {
-      console.error('Coupon error:', error);
-      toast.error('Erro ao aplicar cupom');
+    } catch (err) {
+      console.error('Coupon error:', err);
+      toast.error('Erro ao aplicar cupom. Tente novamente.');
     } finally {
       setIsLoading(false);
     }
@@ -91,16 +72,9 @@ const CouponInput = ({ orderTotal, appliedCoupon, onApplyCoupon }: CouponInputPr
     toast.info('Cupom removido');
   };
 
-  const calculateDiscount = (coupon: AppliedCoupon) => {
-    if (coupon.discountType === 'percentage') {
-      return (orderTotal * coupon.discountValue) / 100;
-    }
-    return Math.min(coupon.discountValue, orderTotal);
-  };
-
   if (appliedCoupon) {
-    const discountAmount = calculateDiscount(appliedCoupon);
-    
+    const discountAmount = calculateDiscount(appliedCoupon, orderTotal);
+
     return (
       <div className="bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800 p-3 rounded-lg">
         <div className="flex items-center justify-between">
@@ -141,11 +115,17 @@ const CouponInput = ({ orderTotal, appliedCoupon, onApplyCoupon }: CouponInputPr
           placeholder="Digite o código"
           value={code}
           onChange={(e) => setCode(e.target.value.toUpperCase())}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              handleApply();
+            }
+          }}
           className="flex-1 uppercase"
           disabled={isLoading}
         />
-        <Button 
-          onClick={handleApply} 
+        <Button
+          onClick={handleApply}
           variant="outline"
           disabled={isLoading || !code.trim()}
         >

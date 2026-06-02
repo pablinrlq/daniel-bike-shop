@@ -10,6 +10,11 @@ interface AuthContextType {
   userRole: UserRole;
   isLoading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
+  signUp: (
+    email: string,
+    password: string,
+    fullName?: string,
+  ) => Promise<{ error: Error | null; needsConfirmation: boolean }>;
   signOut: () => Promise<void>;
   isAdmin: boolean;
   isEditor: boolean;
@@ -86,14 +91,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         email,
         password,
       });
-      
+
       if (error) {
         return { error };
       }
-      
+
       return { error: null };
     } catch (error) {
       return { error: error as Error };
+    }
+  };
+
+  const signUp = async (email: string, password: string, fullName?: string) => {
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: fullName ? { full_name: fullName } : undefined,
+          emailRedirectTo: `${window.location.origin}/conta`,
+        },
+      });
+      if (error) return { error, needsConfirmation: false };
+      const needsConfirmation = !data.session && !!data.user;
+      return { error: null, needsConfirmation };
+    } catch (error) {
+      return { error: error as Error, needsConfirmation: false };
     }
   };
 
@@ -116,6 +139,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         userRole,
         isLoading,
         signIn,
+        signUp,
         signOut,
         isAdmin,
         isEditor,

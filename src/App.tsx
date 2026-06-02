@@ -20,6 +20,9 @@ const CartPage = lazy(() => import("./pages/CartPage"));
 const CheckoutPage = lazy(() => import("./pages/CheckoutPage"));
 const AboutPage = lazy(() => import("./pages/AboutPage"));
 const WishlistPage = lazy(() => import("./pages/WishlistPage"));
+const LoginPage = lazy(() => import("./pages/LoginPage"));
+const SignupPage = lazy(() => import("./pages/SignupPage"));
+const AccountPage = lazy(() => import("./pages/AccountPage"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 // Admin — separado do bundle público
@@ -77,6 +80,9 @@ const App = () => (
                     <Route path="/checkout" element={<CheckoutPage />} />
                     <Route path="/sobre" element={<AboutPage />} />
                     <Route path="/favoritos" element={<WishlistPage />} />
+                    <Route path="/login" element={<LoginPage />} />
+                    <Route path="/cadastro" element={<SignupPage />} />
+                    <Route path="/conta" element={<AccountPage />} />
 
                     {/* Admin routes */}
                     <Route path="/admin/login" element={<AdminLoginPage />} />

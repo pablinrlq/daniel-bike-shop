@@ -5,7 +5,9 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
+import { supabase } from '@/integrations/supabase/client';
 import { useCart } from '@/contexts/CartContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { useCreateOrder } from '@/hooks/useOrders';
 import { useValidateStock } from '@/hooks/useStockValidation';
 import { useStoreSettings } from '@/hooks/useStoreSettings';
@@ -42,6 +44,7 @@ import {
   isValidPhone,
   onlyDigits,
 } from '@/lib/formatters';
+import { calculateShipping, hasEarnedFreeShipping } from '@/lib/shipping';
 
 const FALLBACK_WHATSAPP = '5531995326386';
 
@@ -85,8 +88,11 @@ interface OrderResult {
   nfeNumber?: string;
 }
 
+type PaymentMethod = 'pix' | 'card' | 'whatsapp';
+
 const CheckoutPage = () => {
-  const { items, total, clearCart } = useCart();
+  const { items, total, clearCart, coupon, discount } = useCart();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const createOrder = useCreateOrder();
   const validateStock = useValidateStock();
@@ -97,6 +103,8 @@ const CheckoutPage = () => {
   const [orderResult, setOrderResult] = useState<OrderResult | null>(null);
   const [stockError, setStockError] = useState<string | null>(null);
   const [isValidatingStock, setIsValidatingStock] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('pix');
+  const [isStartingPayment, setIsStartingPayment] = useState(false);
 
   const {
     register,
@@ -120,8 +128,15 @@ const CheckoutPage = () => {
     },
   });
 
-  const shippingCost = total >= 299 ? 0 : 29.9;
-  const orderTotal = total + shippingCost;
+  useEffect(() => {
+    if (!user) return;
+    const metadata = user.user_metadata as { full_name?: string } | null;
+    if (metadata?.full_name) setValue('customer_name', metadata.full_name);
+    if (user.email) setValue('customer_email', user.email);
+  }, [user, setValue]);
+
+  const shippingCost = calculateShipping(total);
+  const orderTotal = total - discount + shippingCost;
   const isStoreOpen = storeSettings?.is_store_open ?? true;
   const whatsappNumber =
     onlyDigits(storeSettings?.whatsapp || '') || FALLBACK_WHATSAPP;
@@ -214,6 +229,13 @@ const CheckoutPage = () => {
       '━━━━━━━━━━━━━━━━━━━━━━',
       '💰 *RESUMO:*',
       `   Subtotal: ${formatPrice(total)}`,
+    );
+
+    if (discount > 0 && coupon) {
+      lines.push(`   Desconto (${coupon.code}): -${formatPrice(discount)}`);
+    }
+
+    lines.push(
       `   Frete: ${shippingCost === 0 ? 'GRÁTIS 🎉' : formatPrice(shippingCost)}`,
       `   *TOTAL: ${formatPrice(orderTotal)}*`,
       '',
@@ -277,9 +299,41 @@ const CheckoutPage = () => {
         notes: values.notes,
         subtotal: total,
         shipping_cost: shippingCost,
+        discount_amount: discount,
+        coupon_code: coupon?.code,
         total: orderTotal,
         items: orderItems,
       });
+
+      if (paymentMethod === 'pix' || paymentMethod === 'card') {
+        setIsStartingPayment(true);
+        try {
+          const { data: mp, error: mpError } = await supabase.functions.invoke<{
+            initPoint?: string;
+            sandboxInitPoint?: string;
+            error?: string;
+            message?: string;
+          }>('mp-create-preference', {
+            body: { orderId: order.id, paymentMethod },
+          });
+          if (mpError) throw mpError;
+          const target = mp?.initPoint || mp?.sandboxInitPoint;
+          if (!target) throw new Error(mp?.message || 'Falha ao iniciar pagamento');
+          clearCart();
+          window.location.href = target;
+          return;
+        } catch (err) {
+          console.error('Mercado Pago error:', err);
+          toast.error(
+            err instanceof Error
+              ? err.message
+              : 'Erro ao iniciar pagamento. Tente o WhatsApp.',
+          );
+          // Fallback: still show the WhatsApp success screen so the order isn't lost
+        } finally {
+          setIsStartingPayment(false);
+        }
+      }
 
       setOrderResult(order as OrderResult);
       setOrderComplete(true);
@@ -558,6 +612,39 @@ const CheckoutPage = () => {
 
                 <Card>
                   <CardHeader>
+                    <CardTitle>Forma de Pagamento</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      {([
+                        { id: 'pix', label: 'Pix', hint: 'À vista, aprovação imediata' },
+                        { id: 'card', label: 'Cartão', hint: 'Crédito ou débito' },
+                        { id: 'whatsapp', label: 'Combinar via WhatsApp', hint: 'Pagar manualmente' },
+                      ] as { id: PaymentMethod; label: string; hint: string }[]).map((opt) => {
+                        const selected = paymentMethod === opt.id;
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => setPaymentMethod(opt.id)}
+                            aria-pressed={selected}
+                            className={`text-left rounded-lg border p-3 transition-colors ${
+                              selected
+                                ? 'border-primary bg-primary/5'
+                                : 'border-border hover:border-primary/40'
+                            }`}
+                          >
+                            <div className="font-medium">{opt.label}</div>
+                            <div className="text-xs text-muted-foreground mt-1">{opt.hint}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
                     <CardTitle>Observações</CardTitle>
                   </CardHeader>
                   <CardContent>
@@ -597,6 +684,12 @@ const CheckoutPage = () => {
                         <span className="text-muted-foreground">Subtotal</span>
                         <span>{formatPrice(total)}</span>
                       </div>
+                      {discount > 0 && coupon && (
+                        <div className="flex justify-between text-primary">
+                          <span>Desconto ({coupon.code})</span>
+                          <span>-{formatPrice(discount)}</span>
+                        </div>
+                      )}
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Frete</span>
                         <span className={shippingCost === 0 ? 'text-green-600' : ''}>
@@ -612,7 +705,7 @@ const CheckoutPage = () => {
                       <span>{formatPrice(orderTotal)}</span>
                     </div>
 
-                    {total >= 299 && (
+                    {hasEarnedFreeShipping(total) && (
                       <p className="text-xs text-green-600">✓ Frete grátis aplicado!</p>
                     )}
 
@@ -624,6 +717,7 @@ const CheckoutPage = () => {
                         createOrder.isPending ||
                         isSubmitting ||
                         isValidatingStock ||
+                        isStartingPayment ||
                         !!stockError
                       }
                     >
@@ -632,19 +726,29 @@ const CheckoutPage = () => {
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                           Validando estoque...
                         </>
+                      ) : isStartingPayment ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Redirecionando para o Mercado Pago...
+                        </>
                       ) : createOrder.isPending || isSubmitting ? (
                         <>
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                           Processando...
                         </>
+                      ) : paymentMethod === 'pix' ? (
+                        'Pagar com Pix'
+                      ) : paymentMethod === 'card' ? (
+                        'Pagar com Cartão'
                       ) : (
                         'Confirmar Pedido'
                       )}
                     </Button>
 
                     <p className="text-xs text-muted-foreground text-center">
-                      Após confirmar, você será direcionado para o WhatsApp para combinar o
-                      pagamento.
+                      {paymentMethod === 'whatsapp'
+                        ? 'Após confirmar, você será direcionado para o WhatsApp para combinar o pagamento.'
+                        : 'Você será redirecionado para o ambiente seguro do Mercado Pago para concluir o pagamento.'}
                     </p>
                   </CardContent>
                 </Card>

@@ -1,4 +1,6 @@
-project_id = "rqpgexsonigkrwhdlznm"
+# project_id é definido por `supabase link --project-ref <ref>` ao apontar
+# para o novo projeto. Veja SETUP.md.
+project_id = "tswnprstidgeojdovsuz"
 
 # Bling OAuth callback é chamado pelo servidor da Bling — não há JWT do Supabase.
 [functions.bling-oauth-callback]
@@ -19,4 +21,21 @@ verify_jwt = true
 verify_jwt = false
 
 [functions.bling-validate-stock]
+verify_jwt = false
+
+# Validação de cupom (anon-callable, valida via RPC).
+[functions.validate-coupon]
+verify_jwt = false
+
+# Mercado Pago — criação de preferência é chamada pelo cliente (anon).
+[functions.mp-create-preference]
+verify_jwt = false
+
+# Mercado Pago webhook é chamado pelos servidores do MP, sem JWT.
+# Verificação de assinatura é feita dentro da função (MP_WEBHOOK_SECRET).
+[functions.mp-webhook]
+verify_jwt = false
+
+# Envio de e-mail transacional é chamado por outras edge functions e por webhooks.
+[functions.send-order-email]
 verify_jwt = false

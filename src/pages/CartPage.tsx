@@ -1,15 +1,14 @@
-import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import { useCart } from '@/contexts/CartContext';
 import { Button } from '@/components/ui/button';
 import { Trash2, Plus, Minus, ShoppingBag, ArrowRight } from 'lucide-react';
-import CouponInput, { AppliedCoupon } from '@/components/CouponInput';
+import CouponInput from '@/components/CouponInput';
+import { calculateShipping, hasEarnedFreeShipping } from '@/lib/shipping';
 
 const CartPage = () => {
-  const { items, removeFromCart, updateQuantity, total, clearCart } = useCart();
-  const [appliedCoupon, setAppliedCoupon] = useState<AppliedCoupon | null>(null);
+  const { items, removeFromCart, updateQuantity, total, clearCart, coupon, applyCoupon, discount } = useCart();
 
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -18,16 +17,8 @@ const CartPage = () => {
     }).format(price);
   };
 
-  const shippingCost = total >= 299 ? 0 : 29.90;
-  
-  // Calculate discount
-  const discountAmount = appliedCoupon
-    ? appliedCoupon.discountType === 'percentage'
-      ? (total * appliedCoupon.discountValue) / 100
-      : Math.min(appliedCoupon.discountValue, total)
-    : 0;
-
-  const orderTotal = total - discountAmount + shippingCost;
+  const shippingCost = calculateShipping(total);
+  const orderTotal = total - discount + shippingCost;
 
   if (items.length === 0) {
     return (
@@ -124,8 +115,8 @@ const CartPage = () => {
                 {/* Coupon Input */}
                 <CouponInput
                   orderTotal={total}
-                  appliedCoupon={appliedCoupon}
-                  onApplyCoupon={setAppliedCoupon}
+                  appliedCoupon={coupon}
+                  onApplyCoupon={applyCoupon}
                 />
 
                 <div className="space-y-3 text-sm pt-4 border-t border-border">
@@ -133,10 +124,10 @@ const CartPage = () => {
                     <span className="text-muted-foreground">Subtotal</span>
                     <span>{formatPrice(total)}</span>
                   </div>
-                  {discountAmount > 0 && (
+                  {discount > 0 && (
                     <div className="flex justify-between text-primary">
-                      <span>Desconto ({appliedCoupon?.code})</span>
-                      <span>-{formatPrice(discountAmount)}</span>
+                      <span>Desconto ({coupon?.code})</span>
+                      <span>-{formatPrice(discount)}</span>
                     </div>
                   )}
                   <div className="flex justify-between">
@@ -150,7 +141,7 @@ const CartPage = () => {
                       <span>Total</span>
                       <span>{formatPrice(orderTotal)}</span>
                     </div>
-                    {total >= 299 && (
+                    {hasEarnedFreeShipping(total) && (
                       <p className="text-xs text-primary mt-1">Você ganhou frete grátis!</p>
                     )}
                   </div>
