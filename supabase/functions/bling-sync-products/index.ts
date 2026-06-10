@@ -7,18 +7,24 @@ const corsHeaders = {
 };
 
 const BLING_API_BASE = 'https://www.bling.com.br/Api/v3';
-
-// Bling tem limite de ~3 req/seg. Mantemos 350ms entre calls.
 const BLING_THROTTLE_MS = 350;
-// Quantos produtos processar por execucao da function (evita timeout do edge runtime)
 const DEFAULT_BATCH_SIZE = 80;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Formata data pro Bling: "YYYY-MM-DD HH:mm:ss" (no fuso UTC).
+const formatBlingDate = (iso: string): string => {
+  const d = new Date(iso);
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+};
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
+
+  let syncStartedAt = new Date().toISOString();
 
   try {
     const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -32,10 +38,10 @@ serve(async (req) => {
     const batchSize = Number((body as { batchSize?: number }).batchSize) || DEFAULT_BATCH_SIZE;
     const skipImageDetail = Boolean((body as { skipImageDetail?: boolean }).skipImageDetail);
     const startPage = Math.max(1, Number((body as { startPage?: number }).startPage) || 1);
+    // mode: "incremental" (delta desde last_incremental_sync_at) ou "full" (tudo, ignora data).
+    const mode = ((body as { mode?: string }).mode || 'incremental') as 'incremental' | 'full';
 
-    console.log(`Starting Bling product sync — batchSize=${batchSize} skipImageDetail=${skipImageDetail} startPage=${startPage}`);
-
-    // Get access token
+    // ---- Token Bling ----
     const { data: tokenData, error: tokenError } = await supabase
       .from('bling_oauth_tokens')
       .select('*')
@@ -51,7 +57,6 @@ serve(async (req) => {
     const expiresAt = new Date(tokenData.expires_at);
     const now = new Date();
 
-    // Refresh token if expired (or expiring in <5 min)
     if (expiresAt.getTime() - now.getTime() < 300000) {
       console.log('Token expired, refreshing...');
       const credentials = btoa(`${BLING_CLIENT_ID}:${BLING_CLIENT_SECRET}`);
@@ -66,24 +71,36 @@ serve(async (req) => {
           refresh_token: tokenData.refresh_token,
         }),
       });
-
       if (!refreshResponse.ok) throw new Error('Failed to refresh token');
-
       const newTokenData = await refreshResponse.json();
       const newExpiresAt = new Date(Date.now() + (newTokenData.expires_in * 1000));
-
       await supabase.from('bling_oauth_tokens').delete().neq('id', '00000000-0000-0000-0000-000000000000');
       await supabase.from('bling_oauth_tokens').insert({
         access_token: newTokenData.access_token,
         refresh_token: newTokenData.refresh_token,
         expires_at: newExpiresAt.toISOString(),
       });
-
       accessToken = newTokenData.access_token;
     }
 
+    // ---- Estado de sync ----
+    const { data: syncState } = await supabase
+      .from('bling_sync_state')
+      .select('*')
+      .eq('id', 1)
+      .maybeSingle();
+
+    const lastIncremental = syncState?.last_incremental_sync_at ?? null;
+    // Em incremental, manda dataAlteracaoInicial pra trazer só o delta.
+    // Em full, ignora data e sincroniza tudo.
+    const dataFilter =
+      mode === 'incremental' && lastIncremental
+        ? `&dataAlteracaoInicial=${encodeURIComponent(formatBlingDate(lastIncremental))}`
+        : '';
+
+    console.log(`Sync mode=${mode} startPage=${startPage} skipImageDetail=${skipImageDetail} lastIncremental=${lastIncremental ?? 'never'}`);
+
     // ---- Helpers ----
-    // Bling fetch com retry no 429 (rate limit). Espera Retry-After se presente.
     const blingFetch = async (path: string, attempt = 1): Promise<Response> => {
       const resp = await fetch(`${BLING_API_BASE}${path}`, {
         headers: {
@@ -100,7 +117,6 @@ serve(async (req) => {
       return resp;
     };
 
-    // Helper: extrai URLs de imagem em alta resolucao do detalhe do produto Bling.
     const fetchHighResImages = async (blingProductId: string): Promise<string[]> => {
       try {
         const detailResp = await blingFetch(`/produtos/${blingProductId}`);
@@ -113,8 +129,7 @@ serve(async (req) => {
         const internas: string[] = (midia?.internas ?? [])
           .map((img: { link?: string }) => img?.link)
           .filter(Boolean);
-        const all = [...externas, ...internas];
-        return Array.from(new Set(all));
+        return Array.from(new Set([...externas, ...internas]));
       } catch (e) {
         console.error('Failed to fetch detail for', blingProductId, e);
         return [];
@@ -139,15 +154,15 @@ serve(async (req) => {
       return true;
     };
 
-    // ---- 1) Listagem de produtos com paginacao ate completar o batch ----
+    // ---- Listagem com paginação ----
     const collected: any[] = [];
     let page = startPage;
     let lastPageFetched = startPage - 1;
     while (collected.length < batchSize && page <= 50) {
-      const response = await blingFetch(`/produtos?pagina=${page}&limite=100`);
+      const response = await blingFetch(`/produtos?pagina=${page}&limite=100${dataFilter}`);
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Bling API error (listagem pagina ${page}): ${response.status} - ${errorText}`);
+        throw new Error(`Bling API error (pagina ${page}): ${response.status} - ${errorText}`);
       }
       const result = await response.json();
       const items = (result?.data ?? []) as any[];
@@ -160,7 +175,40 @@ serve(async (req) => {
     }
 
     const toProcess = collected.slice(0, batchSize);
-    console.log(`Pagina inicial=${startPage}, ultima pagina lida=${lastPageFetched}, coletados=${collected.length}, processando=${toProcess.length}`);
+
+    // CAMINHO RÁPIDO: incremental e nada mudou.
+    if (mode === 'incremental' && startPage === 1 && toProcess.length === 0) {
+      await supabase
+        .from('bling_sync_state')
+        .update({
+          last_incremental_sync_at: syncStartedAt,
+          last_sync_status: 'up_to_date',
+          last_sync_synced_count: 0,
+          last_sync_failed_count: 0,
+          last_sync_images_count: 0,
+          last_sync_error: null,
+        })
+        .eq('id', 1);
+
+      console.log('Up to date — nothing changed in Bling since last sync.');
+      return new Response(
+        JSON.stringify({
+          success: true,
+          upToDate: true,
+          synced: 0,
+          failed: 0,
+          imagesUpdated: 0,
+          total: 0,
+          hasMore: false,
+          nextPage: 1,
+          lastPageFetched: 0,
+          message: 'Catálogo já está sincronizado.',
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 },
+      );
+    }
+
+    console.log(`startPage=${startPage} lastPage=${lastPageFetched} coletados=${collected.length} processing=${toProcess.length}`);
 
     let synced = 0;
     let failed = 0;
@@ -210,6 +258,7 @@ serve(async (req) => {
           .maybeSingle();
 
         let dbProductId: string | undefined;
+        let isNew = false;
         if (existingProduct) {
           await supabase
             .from('products')
@@ -236,16 +285,30 @@ serve(async (req) => {
             continue;
           }
           dbProductId = newProduct.id;
+          isNew = true;
         }
 
         if (dbProductId) {
-          let hdImages: string[] = [];
-          if (!skipImageDetail) {
-            hdImages = await fetchHighResImages(productId);
-            await sleep(BLING_THROTTLE_MS);
+          // Em incremental, só re-fetch HD images se for produto novo OU se nao tem imagem ainda.
+          // Em full, sempre re-fetch (re-baixa tudo).
+          let needsImageRefresh = mode === 'full' || isNew;
+          if (!needsImageRefresh) {
+            const { count } = await supabase
+              .from('product_images')
+              .select('id', { count: 'exact', head: true })
+              .eq('product_id', dbProductId);
+            needsImageRefresh = (count ?? 0) === 0;
           }
-          const updated = await syncProductImages(dbProductId, hdImages, product.imagemURL);
-          if (updated) imagesUpdated++;
+
+          if (needsImageRefresh) {
+            let hdImages: string[] = [];
+            if (!skipImageDetail) {
+              hdImages = await fetchHighResImages(productId);
+              await sleep(BLING_THROTTLE_MS);
+            }
+            const updated = await syncProductImages(dbProductId, hdImages, product.imagemURL);
+            if (updated) imagesUpdated++;
+          }
         }
 
         synced++;
@@ -255,14 +318,29 @@ serve(async (req) => {
       }
     }
 
-    const nextPage = collected.length >= batchSize ? lastPageFetched : lastPageFetched + 1;
     const hasMore = collected.length >= batchSize;
+    const nextPage = hasMore ? lastPageFetched : lastPageFetched + 1;
 
-    console.log(`Sync complete. Synced=${synced} Failed=${failed} Images=${imagesUpdated} HasMore=${hasMore} NextPage=${nextPage}`);
+    // Se já é o último lote, persiste o timestamp pra próxima incremental
+    if (!hasMore) {
+      const update: Record<string, unknown> = {
+        last_incremental_sync_at: syncStartedAt,
+        last_sync_status: failed === 0 ? 'ok' : 'partial',
+        last_sync_synced_count: synced,
+        last_sync_failed_count: failed,
+        last_sync_images_count: imagesUpdated,
+        last_sync_error: null,
+      };
+      if (mode === 'full') {
+        update.last_full_sync_at = syncStartedAt;
+      }
+      await supabase.from('bling_sync_state').update(update).eq('id', 1);
+    }
 
     return new Response(
       JSON.stringify({
         success: true,
+        upToDate: false,
         synced,
         failed,
         imagesUpdated,
@@ -270,11 +348,27 @@ serve(async (req) => {
         hasMore,
         nextPage,
         lastPageFetched,
+        mode,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
     );
   } catch (error) {
     console.error('Product sync error:', error);
+    // Registra o erro na tabela de estado
+    try {
+      const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
+      const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+      const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      await supabase
+        .from('bling_sync_state')
+        .update({
+          last_sync_status: 'error',
+          last_sync_error: error instanceof Error ? error.message : String(error),
+        })
+        .eq('id', 1);
+    } catch {
+      // ignore
+    }
     return new Response(
       JSON.stringify({ success: false, error: error instanceof Error ? error.message : String(error) }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
