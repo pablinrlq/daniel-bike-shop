@@ -23,6 +23,10 @@ dist-ssr
 # Agent skills (instalados localmente via `npx skills add`)
 .agents/
 
+# Supabase CLI — metadata local da maquina (project ref, versoes, etc)
+supabase/.temp/
+supabase/.branches/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
