@@ -7,6 +7,7 @@ import { useStoreSettings } from '@/hooks/useStoreSettings';
 import { Button } from '@/components/ui/button';
 import { Trash2, Plus, Minus, ShoppingBag, ArrowRight, MessageCircle } from 'lucide-react';
 import CouponInput from '@/components/CouponInput';
+import ProductImage from '@/components/ProductImage';
 import { calculateShipping, hasEarnedFreeShipping } from '@/lib/shipping';
 import {
   buildCartMessage,
@@ -70,12 +71,12 @@ const CartPage = () => {
             <div className="lg:col-span-2 space-y-4">
               {items.map(item => (
                 <div key={item.product.id} className="flex gap-4 p-4 bg-card border border-border">
-                  <img
+                  <ProductImage
                     src={item.product.image}
                     alt={item.product.name}
                     loading="lazy"
                     decoding="async"
-                    className="w-24 h-24 object-cover flex-shrink-0"
+                    className="w-24 h-24 object-cover flex-shrink-0 bg-muted"
                   />
                   <div className="flex-1 min-w-0">
                     <h3 className="font-semibold truncate">{item.product.name}</h3>

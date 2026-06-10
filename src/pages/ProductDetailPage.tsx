@@ -14,6 +14,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import WishlistButton from '@/components/WishlistButton';
 import ProductReviews from '@/components/ProductReviews';
+import ProductImage from '@/components/ProductImage';
 import SEO from '@/components/SEO';
 import {
   buildProductMessage,
@@ -162,8 +163,9 @@ const ProductDetailPage = () => {
             {/* Images */}
             <div className="space-y-4">
               <div className="relative aspect-square bg-card border border-border overflow-hidden">
-                <img
+                <ProductImage
                   src={images[selectedImage]}
+                  fallbacks={images}
                   alt={product.name}
                   loading="eager"
                   fetchPriority="high"
@@ -187,13 +189,13 @@ const ProductDetailPage = () => {
                     <button
                       key={index}
                       onClick={() => setSelectedImage(index)}
-                      className={`flex-shrink-0 w-20 h-20 border overflow-hidden transition-all ${
-                        selectedImage === index 
-                          ? 'border-primary ring-2 ring-primary/20' 
+                      className={`flex-shrink-0 w-20 h-20 border overflow-hidden transition-all bg-muted ${
+                        selectedImage === index
+                          ? 'border-primary ring-2 ring-primary/20'
                           : 'border-border hover:border-primary/50'
                       }`}
                     >
-                      <img src={img} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+                      <ProductImage src={img} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                     </button>
                   ))}
                 </div>

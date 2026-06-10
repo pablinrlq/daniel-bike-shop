@@ -1,11 +1,14 @@
 import { Product } from '@/hooks/useProducts';
+import { Product as CartProduct } from '@/types/product';
 import { Button } from '@/components/ui/button';
-import { MessageCircle, Eye } from 'lucide-react';
+import { MessageCircle, Eye, ShoppingCart } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
+import { useCart } from '@/contexts/CartContext';
 import { useStoreSettings } from '@/hooks/useStoreSettings';
 import { useAuth } from '@/contexts/AuthContext';
 import WishlistButton from '@/components/WishlistButton';
+import ProductImage from '@/components/ProductImage';
 import {
   buildProductMessage,
   buildWhatsappUrl,
@@ -18,6 +21,7 @@ interface ProductCardProps {
 }
 
 const ProductCard = ({ product }: ProductCardProps) => {
+  const { addToCart } = useCart();
   const { data: storeSettings } = useStoreSettings();
   const { user } = useAuth();
 
@@ -38,6 +42,27 @@ const ProductCard = ({ product }: ProductCardProps) => {
     window.open(buildWhatsappUrl(number, message), '_blank', 'noopener,noreferrer');
   };
 
+  const handleAddToCart = () => {
+    if (!canPurchase) {
+      toast.error(isStoreOpen ? 'Produto esgotado' : 'A loja está fechada no momento.');
+      return;
+    }
+    const cartProduct: CartProduct = {
+      id: product.id,
+      slug: product.slug,
+      name: product.name,
+      description: product.description,
+      price: product.price,
+      originalPrice: product.originalPrice,
+      category: product.categorySlug as 'bicicletas' | 'pecas' | 'acessorios',
+      image: product.image,
+      stock: product.stock,
+      featured: product.featured,
+    };
+    addToCart(cartProduct);
+    toast.success(`${product.name} adicionado ao carrinho!`);
+  };
+
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat('pt-BR', {
       style: 'currency',
@@ -51,9 +76,10 @@ const ProductCard = ({ product }: ProductCardProps) => {
 
   return (
     <div className="group bg-card border border-border overflow-hidden hover:border-primary/50 transition-all duration-300">
-      <div className="relative aspect-square overflow-hidden">
-        <img
+      <div className="relative aspect-square overflow-hidden bg-muted">
+        <ProductImage
           src={product.image}
+          fallbacks={product.images}
           alt={product.name}
           loading="lazy"
           decoding="async"
@@ -95,6 +121,17 @@ const ProductCard = ({ product }: ProductCardProps) => {
                 Ver
               </Button>
             </Link>
+            <Button
+              size="icon"
+              variant="outline"
+              onClick={handleAddToCart}
+              disabled={!canPurchase}
+              aria-label="Adicionar ao carrinho"
+              title="Adicionar ao carrinho"
+              className="shrink-0"
+            >
+              <ShoppingCart className="h-4 w-4" />
+            </Button>
             <Button
               size="sm"
               onClick={handleWhatsapp}
