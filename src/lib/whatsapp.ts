@@ -64,9 +64,9 @@ export const buildProductMessage = (product: ProductLite, contact: UserContact):
   const lines = [
     'Olá! Tenho interesse neste produto:',
     '',
-    `🚲 *${product.name}*`,
-    `💰 ${formatPrice(product.price)}`,
-    `🔗 ${url}`,
+    `*Produto:* ${product.name}`,
+    `*Preço:* ${formatPrice(product.price)}`,
+    `*Link:* ${url}`,
     ...contactBlock(contact),
     '',
     'Pode me ajudar?',

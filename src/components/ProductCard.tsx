@@ -75,45 +75,57 @@ const ProductCard = ({ product }: ProductCardProps) => {
     : 0;
 
   return (
-    <div className="group bg-card border border-border overflow-hidden hover:border-primary/50 transition-all duration-300">
-      <div className="relative aspect-square overflow-hidden bg-muted">
+    <div className="group bg-card border border-border rounded-lg overflow-hidden hover:border-primary/50 hover:shadow-lg transition-all duration-300 flex flex-col">
+      {/* Imagem em fundo branco com object-contain pra nao cortar o produto */}
+      <div className="relative aspect-square overflow-hidden bg-white">
         <ProductImage
           src={product.image}
           fallbacks={product.images}
           alt={product.name}
           loading="lazy"
           decoding="async"
-          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+          className="absolute inset-0 w-full h-full object-contain p-4 group-hover:scale-105 transition-transform duration-500"
         />
-        {/* Wishlist button */}
+
+        {/* Wishlist (canto superior direito) */}
         <div className="absolute top-2 right-2 z-10">
-          <WishlistButton 
-            productId={product.id} 
+          <WishlistButton
+            productId={product.id}
             productName={product.name}
-            className="bg-background/80 hover:bg-background"
+            className="bg-white/90 hover:bg-white text-foreground shadow-sm"
           />
         </div>
-        {discount > 0 && (
-          <span className="absolute top-3 left-3 bg-destructive text-destructive-foreground text-xs font-bold px-2 py-1">
-            -{discount}%
-          </span>
-        )}
-        {product.stock <= 3 && product.stock > 0 && (
-          <span className="absolute top-12 left-3 bg-secondary text-secondary-foreground text-xs font-bold px-2 py-1">
-            Últimas unidades
-          </span>
-        )}
+
+        {/* Badges (canto superior esquerdo, empilhados, sem animacao) */}
+        <div className="absolute top-2 left-2 z-10 flex flex-col gap-1 items-start">
+          {discount > 0 && (
+            <span className="bg-destructive text-destructive-foreground text-[11px] font-bold px-2 py-0.5 rounded shadow-sm">
+              -{discount}%
+            </span>
+          )}
+          {product.stock <= 3 && product.stock > 0 && (
+            <span className="bg-amber-500 text-white text-[11px] font-semibold px-2 py-0.5 rounded shadow-sm">
+              Últimas unidades
+            </span>
+          )}
+        </div>
+
         {isOutOfStock && (
-          <div className="absolute inset-0 bg-background/80 flex items-center justify-center">
-            <span className="text-destructive font-semibold text-lg">Esgotado</span>
+          <div className="absolute inset-0 bg-white/70 backdrop-blur-[1px] flex items-center justify-center">
+            <span className="bg-foreground/90 text-background font-semibold px-3 py-1 rounded text-sm uppercase tracking-wider">
+              Esgotado
+            </span>
           </div>
         )}
         {!isStoreOpen && !isOutOfStock && (
-          <div className="absolute inset-0 bg-background/60 flex items-center justify-center">
-            <span className="text-muted-foreground font-semibold">Loja Fechada</span>
+          <div className="absolute inset-0 bg-white/70 backdrop-blur-[1px] flex items-center justify-center">
+            <span className="bg-foreground/90 text-background font-semibold px-3 py-1 rounded text-sm uppercase tracking-wider">
+              Loja Fechada
+            </span>
           </div>
         )}
-        <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-background/90 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+        {/* Overlay com botoes — aparece no hover (desktop) e via touch (mobile) */}
+        <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/70 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200">
           <div className="flex gap-2">
             <Link to={`/produto/${product.slug || product.id}`} className="flex-1">
               <Button variant="secondary" size="sm" className="w-full gap-1">
@@ -128,7 +140,7 @@ const ProductCard = ({ product }: ProductCardProps) => {
               disabled={!canPurchase}
               aria-label="Adicionar ao carrinho"
               title="Adicionar ao carrinho"
-              className="shrink-0"
+              className="shrink-0 bg-background"
             >
               <ShoppingCart className="h-4 w-4" />
             </Button>
@@ -144,13 +156,15 @@ const ProductCard = ({ product }: ProductCardProps) => {
           </div>
         </div>
       </div>
-      <div className="p-4">
-        <span className="text-xs text-muted-foreground uppercase tracking-wider">
+
+      <div className="p-4 flex flex-col flex-1">
+        <span className="text-[11px] text-muted-foreground uppercase tracking-wider">
           {product.category}
         </span>
-        <h3 className="font-semibold mt-1 line-clamp-1">{product.name}</h3>
-        <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{product.description}</p>
-        <div className="mt-3 flex items-baseline gap-2">
+        <h3 className="font-semibold mt-1 line-clamp-2 leading-snug min-h-[2.6rem]">
+          {product.name}
+        </h3>
+        <div className="mt-auto pt-3 flex items-baseline gap-2 flex-wrap">
           <span className="text-lg font-bold text-primary">{formatPrice(product.price)}</span>
           {product.originalPrice && (
             <span className="text-sm text-muted-foreground line-through">
@@ -158,9 +172,6 @@ const ProductCard = ({ product }: ProductCardProps) => {
             </span>
           )}
         </div>
-        {isOutOfStock && (
-          <p className="text-xs text-destructive mt-2 font-medium">Produto esgotado</p>
-        )}
       </div>
     </div>
   );
