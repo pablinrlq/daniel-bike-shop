@@ -8,7 +8,6 @@ const corsHeaders = {
 
 const BLING_API_BASE = 'https://www.bling.com.br/Api/v3';
 const BLING_THROTTLE_MS = 350;
-const DEFAULT_BATCH_SIZE = 80;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -35,7 +34,6 @@ serve(async (req) => {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
     const body = await req.json().catch(() => ({} as Record<string, unknown>));
-    const batchSize = Number((body as { batchSize?: number }).batchSize) || DEFAULT_BATCH_SIZE;
     const skipImageDetail = Boolean((body as { skipImageDetail?: boolean }).skipImageDetail);
     const startPage = Math.max(1, Number((body as { startPage?: number }).startPage) || 1);
     // mode: "incremental" (delta desde last_incremental_sync_at) ou "full" (tudo, ignora data).
@@ -154,27 +152,17 @@ serve(async (req) => {
       return true;
     };
 
-    // ---- Listagem com paginação ----
-    const collected: any[] = [];
-    let page = startPage;
-    let lastPageFetched = startPage - 1;
-    while (collected.length < batchSize && page <= 50) {
-      const response = await blingFetch(`/produtos?pagina=${page}&limite=100${dataFilter}`);
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Bling API error (pagina ${page}): ${response.status} - ${errorText}`);
-      }
-      const result = await response.json();
-      const items = (result?.data ?? []) as any[];
-      if (items.length === 0) break;
-      collected.push(...items);
-      lastPageFetched = page;
-      page++;
-      if (items.length < 100) break;
-      await sleep(BLING_THROTTLE_MS);
+    // ---- Listagem: uma página por execução ----
+    // Bling devolve 100 produtos por página. Processamos uma página por chamada
+    // pra ficar embaixo do timeout do edge runtime; o front faz o loop entre páginas.
+    const response = await blingFetch(`/produtos?pagina=${startPage}&limite=100${dataFilter}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Bling API error (pagina ${startPage}): ${response.status} - ${errorText}`);
     }
-
-    const toProcess = collected.slice(0, batchSize);
+    const result = await response.json();
+    const toProcess = (result?.data ?? []) as any[];
+    const lastPageFetched = startPage;
 
     // CAMINHO RÁPIDO: incremental e nada mudou.
     if (mode === 'incremental' && startPage === 1 && toProcess.length === 0) {
@@ -208,7 +196,7 @@ serve(async (req) => {
       );
     }
 
-    console.log(`startPage=${startPage} lastPage=${lastPageFetched} coletados=${collected.length} processing=${toProcess.length}`);
+    console.log(`startPage=${startPage} fetched=${toProcess.length}`);
 
     let synced = 0;
     let failed = 0;
@@ -318,8 +306,9 @@ serve(async (req) => {
       }
     }
 
-    const hasMore = collected.length >= batchSize;
-    const nextPage = hasMore ? lastPageFetched : lastPageFetched + 1;
+    // Página cheia (100) = provavelmente tem mais. Página parcial = fim.
+    const hasMore = toProcess.length === 100;
+    const nextPage = lastPageFetched + 1;
 
     // Se já é o último lote, persiste o timestamp pra próxima incremental
     if (!hasMore) {
