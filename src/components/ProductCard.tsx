@@ -1,49 +1,41 @@
 import { Product } from '@/hooks/useProducts';
-import { Product as CartProduct } from '@/types/product';
 import { Button } from '@/components/ui/button';
-import { useCart } from '@/contexts/CartContext';
-import { ShoppingCart, Eye } from 'lucide-react';
+import { MessageCircle, Eye } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useStoreSettings } from '@/hooks/useStoreSettings';
+import { useAuth } from '@/contexts/AuthContext';
 import WishlistButton from '@/components/WishlistButton';
+import {
+  buildProductMessage,
+  buildWhatsappUrl,
+  resolveWhatsappNumber,
+  userToContact,
+} from '@/lib/whatsapp';
 
 interface ProductCardProps {
   product: Product;
 }
 
 const ProductCard = ({ product }: ProductCardProps) => {
-  const { addToCart } = useCart();
   const { data: storeSettings } = useStoreSettings();
+  const { user } = useAuth();
 
   const isOutOfStock = product.stock <= 0;
   const isStoreOpen = storeSettings?.is_store_open ?? true;
   const canPurchase = isStoreOpen && !isOutOfStock;
 
-  const handleAddToCart = () => {
+  const handleWhatsapp = () => {
     if (!canPurchase) {
-      if (!isStoreOpen) {
-        toast.error('A loja está fechada no momento.');
-      } else {
-        toast.error('Produto esgotado');
-      }
+      toast.error(isStoreOpen ? 'Produto esgotado' : 'A loja está fechada no momento.');
       return;
     }
-
-    const cartProduct: CartProduct = {
-      id: product.id,
-      name: product.name,
-      description: product.description,
-      price: product.price,
-      originalPrice: product.originalPrice,
-      category: product.categorySlug as 'bicicletas' | 'pecas' | 'acessorios',
-      image: product.image,
-      stock: product.stock,
-      featured: product.featured,
-      slug: product.slug,
-    };
-    addToCart(cartProduct);
-    toast.success(`${product.name} adicionado ao carrinho!`);
+    const number = resolveWhatsappNumber(storeSettings?.whatsapp);
+    const message = buildProductMessage(
+      { id: product.id, slug: product.slug, name: product.name, price: product.price },
+      userToContact(user),
+    );
+    window.open(buildWhatsappUrl(number, message), '_blank', 'noopener,noreferrer');
   };
 
   const formatPrice = (price: number) => {
@@ -103,14 +95,14 @@ const ProductCard = ({ product }: ProductCardProps) => {
                 Ver
               </Button>
             </Link>
-            <Button 
-              size="sm" 
-              onClick={handleAddToCart}
+            <Button
+              size="sm"
+              onClick={handleWhatsapp}
               disabled={!canPurchase}
-              className="flex-1 gap-1"
+              className="flex-1 gap-1 bg-[#25D366] hover:bg-[#20BA5A] text-white"
             >
-              <ShoppingCart className="h-4 w-4" />
-              {isOutOfStock ? 'Esgotado' : 'Comprar'}
+              <MessageCircle className="h-4 w-4" />
+              {isOutOfStock ? 'Esgotado' : 'Quero esse'}
             </Button>
           </div>
         </div>

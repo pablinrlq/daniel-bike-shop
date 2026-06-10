@@ -2,13 +2,29 @@ import { Link } from 'react-router-dom';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import { useCart } from '@/contexts/CartContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { useStoreSettings } from '@/hooks/useStoreSettings';
 import { Button } from '@/components/ui/button';
-import { Trash2, Plus, Minus, ShoppingBag, ArrowRight } from 'lucide-react';
+import { Trash2, Plus, Minus, ShoppingBag, ArrowRight, MessageCircle } from 'lucide-react';
 import CouponInput from '@/components/CouponInput';
 import { calculateShipping, hasEarnedFreeShipping } from '@/lib/shipping';
+import {
+  buildCartMessage,
+  buildWhatsappUrl,
+  resolveWhatsappNumber,
+  userToContact,
+} from '@/lib/whatsapp';
 
 const CartPage = () => {
   const { items, removeFromCart, updateQuantity, total, clearCart, coupon, applyCoupon, discount } = useCart();
+  const { user } = useAuth();
+  const { data: storeSettings } = useStoreSettings();
+
+  const handleWhatsappCheckout = () => {
+    const number = resolveWhatsappNumber(storeSettings?.whatsapp);
+    const message = buildCartMessage(items, userToContact(user));
+    window.open(buildWhatsappUrl(number, message), '_blank', 'noopener,noreferrer');
+  };
 
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -146,12 +162,15 @@ const CartPage = () => {
                     )}
                   </div>
                 </div>
-                <Link to="/checkout" className="block">
-                  <Button className="w-full gap-2" size="lg">
-                    Finalizar Pedido
-                    <ArrowRight className="h-4 w-4" />
-                  </Button>
-                </Link>
+                <Button
+                  onClick={handleWhatsappCheckout}
+                  className="w-full gap-2 bg-[#25D366] hover:bg-[#20BA5A] text-white"
+                  size="lg"
+                >
+                  <MessageCircle className="h-4 w-4" />
+                  Finalizar pelo WhatsApp
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
                 <Link to="/produtos" className="block text-center">
                   <Button variant="link" className="text-muted-foreground">
                     Continuar Comprando

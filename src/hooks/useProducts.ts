@@ -138,10 +138,14 @@ export const useProductsByCategory = (categorySlug: string) => {
   });
 };
 
-export const useProduct = (id: string) => {
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Aceita UUID (id) OU slug. ProductCard linka por slug; rotas antigas com UUID continuam funcionando.
+export const useProduct = (idOrSlug: string) => {
   return useQuery({
-    queryKey: ['products', id],
+    queryKey: ['products', idOrSlug],
     queryFn: async () => {
+      const column = UUID_RE.test(idOrSlug) ? 'id' : 'slug';
       const { data, error } = await supabase
         .from('products')
         .select(`
@@ -149,13 +153,14 @@ export const useProduct = (id: string) => {
           category:categories(*),
           images:product_images(*)
         `)
-        .eq('id', id)
-        .single();
+        .eq(column, idOrSlug)
+        .maybeSingle();
 
       if (error) throw error;
+      if (!data) throw new Error('not_found');
       return transformProduct(data as DbProduct);
     },
-    enabled: !!id,
+    enabled: !!idOrSlug,
   });
 };
 

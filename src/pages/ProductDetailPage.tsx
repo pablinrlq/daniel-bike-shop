@@ -4,16 +4,25 @@ import Footer from '@/components/Footer';
 import { useProduct, useProducts } from '@/hooks/useProducts';
 import { Button } from '@/components/ui/button';
 import { useCart } from '@/contexts/CartContext';
-import { ShoppingCart, ArrowLeft, Truck, Shield, RotateCcw, AlertTriangle } from 'lucide-react';
+import { ShoppingCart, MessageCircle, ArrowLeft, Truck, Shield, RotateCcw, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import ProductCard from '@/components/ProductCard';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useEffect, useState } from 'react';
 import { useStoreSettings } from '@/hooks/useStoreSettings';
+import { useAuth } from '@/contexts/AuthContext';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import WishlistButton from '@/components/WishlistButton';
 import ProductReviews from '@/components/ProductReviews';
 import SEO from '@/components/SEO';
+import {
+  buildProductMessage,
+  buildWhatsappUrl,
+  resolveWhatsappNumber,
+  userToContact,
+} from '@/lib/whatsapp';
+
+const SITE_URL = (import.meta.env.VITE_SITE_URL as string | undefined) || 'https://danielbikeshop.com.br';
 
 const ProductDetailPage = () => {
   const { id } = useParams();
@@ -21,6 +30,7 @@ const ProductDetailPage = () => {
   const { data: allProducts } = useProducts();
   const { addToCart } = useCart();
   const { data: storeSettings } = useStoreSettings();
+  const { user } = useAuth();
   const [selectedImage, setSelectedImage] = useState(0);
 
   const isOutOfStock = product ? product.stock <= 0 : false;
@@ -93,6 +103,19 @@ const ProductDetailPage = () => {
     toast.success(`${product.name} adicionado ao carrinho!`);
   };
 
+  const handleWhatsapp = () => {
+    if (!canPurchase) {
+      toast.error(isStoreOpen ? 'Produto esgotado' : 'A loja está fechada no momento.');
+      return;
+    }
+    const number = resolveWhatsappNumber(storeSettings?.whatsapp);
+    const message = buildProductMessage(
+      { id: product.id, slug: product.slug, name: product.name, price: product.price },
+      userToContact(user),
+    );
+    window.open(buildWhatsappUrl(number, message), '_blank', 'noopener,noreferrer');
+  };
+
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat('pt-BR', {
       style: 'currency',
@@ -115,7 +138,7 @@ const ProductDetailPage = () => {
       <SEO
         title={product.name}
         description={product.description?.slice(0, 160) || `${product.name} — Daniel Bike Shop`}
-        canonical={`https://ride-sell.vercel.app/produto/${product.slug || product.id}`}
+        canonical={`${SITE_URL}/produto/${product.slug || product.id}`}
       />
       <ProductJsonLd product={product} />
       <Header />
@@ -240,17 +263,27 @@ const ProductDetailPage = () => {
               </div>
 
               <div className="mt-8 flex flex-wrap gap-3">
-                <Button 
-                  size="lg" 
+                <Button
+                  size="lg"
+                  onClick={handleWhatsapp}
+                  disabled={!canPurchase}
+                  className="gap-2 bg-[#25D366] hover:bg-[#20BA5A] text-white"
+                >
+                  <MessageCircle className="h-5 w-5" />
+                  {isOutOfStock ? 'Produto Esgotado' : !isStoreOpen ? 'Loja Fechada' : 'Quero esse pelo WhatsApp'}
+                </Button>
+                <Button
+                  size="lg"
+                  variant="outline"
                   onClick={handleAddToCart}
                   disabled={!canPurchase}
                   className="gap-2"
                 >
                   <ShoppingCart className="h-5 w-5" />
-                  {isOutOfStock ? 'Produto Esgotado' : !isStoreOpen ? 'Loja Fechada' : 'Adicionar ao Carrinho'}
+                  Carrinho
                 </Button>
-                <WishlistButton 
-                  productId={product.id} 
+                <WishlistButton
+                  productId={product.id}
                   productName={product.name}
                   variant="full"
                 />
@@ -325,7 +358,7 @@ const ProductJsonLd = ({ product }: { product: any }) => {
           product.stock > 0
             ? 'https://schema.org/InStock'
             : 'https://schema.org/OutOfStock',
-        url: `https://ride-sell.vercel.app/produto/${product.slug || product.id}`,
+        url: `${SITE_URL}/produto/${product.slug || product.id}`,
       },
     });
     return () => {

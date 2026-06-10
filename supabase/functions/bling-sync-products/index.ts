@@ -99,14 +99,64 @@ serve(async (req) => {
     }
 
     console.log(`Fetched ${allProducts.length} products from Bling`);
-    
+
     let synced = 0;
     let failed = 0;
+    let imagesUpdated = 0;
+
+    // Helper: extrai URLs de imagem em alta resolu\u00e7\u00e3o do detalhe do produto Bling.
+    // A listagem (/produtos) s\u00f3 retorna `imagemURL` (thumbnail).
+    // O detalhe (/produtos/{id}) tem `midia.imagens.{externas,internas}` em tamanho cheio.
+    const fetchHighResImages = async (blingProductId: string): Promise<string[]> => {
+      try {
+        const detailResp = await fetch(`${BLING_API_BASE}/produtos/${blingProductId}`, {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Accept': 'application/json',
+          },
+        });
+        if (!detailResp.ok) return [];
+        const detail = await detailResp.json();
+        const midia = detail?.data?.midia?.imagens;
+        const externas: string[] = (midia?.externas ?? [])
+          .map((img: { link?: string }) => img?.link)
+          .filter(Boolean);
+        const internas: string[] = (midia?.internas ?? [])
+          .map((img: { link?: string }) => img?.link)
+          .filter(Boolean);
+        // Prioriza externas (geralmente j\u00e1 est\u00e3o em CDN/alta resolu\u00e7\u00e3o).
+        const all = [...externas, ...internas];
+        // Dedup preservando ordem
+        return Array.from(new Set(all));
+      } catch (e) {
+        console.error('Failed to fetch detail for', blingProductId, e);
+        return [];
+      }
+    };
+
+    const syncProductImages = async (productDbId: string, urls: string[], fallback?: string) => {
+      const list = urls.length > 0 ? urls : fallback ? [fallback] : [];
+      if (list.length === 0) return;
+      // Strategy: replace all images on every sync para refletir o estado do Bling.
+      await supabase.from('product_images').delete().eq('product_id', productDbId);
+      const rows = list.map((url, index) => ({
+        product_id: productDbId,
+        image_url: url,
+        is_primary: index === 0,
+        display_order: index,
+      }));
+      const { error: insertImgError } = await supabase.from('product_images').insert(rows);
+      if (insertImgError) {
+        console.error('Failed to insert product images:', productDbId, insertImgError);
+        return;
+      }
+      imagesUpdated++;
+    };
 
     for (const product of allProducts) {
       try {
         const productId = product.id.toString();
-        
+
         // Cache product data
         await supabase
           .from('bling_products_cache')
@@ -143,6 +193,7 @@ serve(async (req) => {
           .eq('sku', productData.sku)
           .maybeSingle();
 
+        let dbProductId: string | undefined;
         if (existingProduct) {
           await supabase
             .from('products')
@@ -156,29 +207,25 @@ serve(async (req) => {
               brand: productData.brand,
             })
             .eq('id', existingProduct.id);
+          dbProductId = existingProduct.id;
         } else {
           const { data: newProduct, error: insertError } = await supabase
             .from('products')
             .insert(productData)
-            .select()
+            .select('id')
             .single();
-
           if (insertError) {
             console.error('Failed to insert product:', productData.sku, insertError);
             failed++;
             continue;
           }
+          dbProductId = newProduct.id;
+        }
 
-          if (product.imagemURL && newProduct) {
-            await supabase
-              .from('product_images')
-              .insert({
-                product_id: newProduct.id,
-                image_url: product.imagemURL,
-                is_primary: true,
-                display_order: 0,
-              });
-          }
+        if (dbProductId) {
+          // Pega as imagens HD do detalhe do produto. Fallback: imagemURL (thumbnail).
+          const hdImages = await fetchHighResImages(productId);
+          await syncProductImages(dbProductId, hdImages, product.imagemURL);
         }
 
         synced++;
@@ -191,7 +238,7 @@ serve(async (req) => {
     console.log(`Sync complete. Synced: ${synced}, Failed: ${failed}`);
 
     return new Response(
-      JSON.stringify({ success: true, synced, failed, total: allProducts.length }),
+      JSON.stringify({ success: true, synced, failed, imagesUpdated, total: allProducts.length }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
     );
   } catch (error) {
