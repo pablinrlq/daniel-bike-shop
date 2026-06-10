@@ -1,20 +1,33 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
-import { 
-  Loader2, 
-  RefreshCw, 
-  CheckCircle, 
-  XCircle, 
+import {
+  Loader2,
+  RefreshCw,
+  CheckCircle,
+  XCircle,
   Link as LinkIcon,
   Package,
-  AlertTriangle
+  AlertTriangle,
 } from 'lucide-react';
+
+interface SyncResult {
+  success: boolean;
+  synced: number;
+  failed: number;
+  imagesUpdated: number;
+  total: number;
+  hasMore: boolean;
+  nextPage: number;
+  lastPageFetched: number;
+  error?: string;
+}
 
 const AdminBlingPage: React.FC = () => {
   const queryClient = useQueryClient();
@@ -31,28 +44,65 @@ const AdminBlingPage: React.FC = () => {
     retry: false,
   });
 
-  // Sync products mutation
-  const syncProductsMutation = useMutation({
-    mutationFn: async () => {
-      const { data, error } = await supabase.functions.invoke('bling-sync-products');
-      if (error) throw error;
-      return data;
-    },
-    onSuccess: (data) => {
+  // Sync products — chama a function em loop, batch a batch, ate hasMore=false.
+  const [skipImageDetail, setSkipImageDetail] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [progress, setProgress] = useState<{
+    totalSynced: number;
+    totalFailed: number;
+    totalImages: number;
+    currentPage: number;
+  }>({ totalSynced: 0, totalFailed: 0, totalImages: 0, currentPage: 0 });
+
+  const runFullSync = async () => {
+    setIsSyncing(true);
+    setProgress({ totalSynced: 0, totalFailed: 0, totalImages: 0, currentPage: 0 });
+    let nextPage = 1;
+    let totalSynced = 0;
+    let totalFailed = 0;
+    let totalImages = 0;
+
+    try {
+      // safety cap pra nao virar loop infinito (50 lotes × 80 = 4000 produtos)
+      for (let i = 0; i < 50; i++) {
+        const { data, error } = await supabase.functions.invoke<SyncResult>(
+          'bling-sync-products',
+          { body: { startPage: nextPage, skipImageDetail } },
+        );
+        if (error) throw error;
+        if (!data) throw new Error('Resposta vazia da function');
+        if (!data.success) throw new Error(data.error || 'Erro desconhecido');
+
+        totalSynced += data.synced;
+        totalFailed += data.failed;
+        totalImages += data.imagesUpdated;
+        setProgress({
+          totalSynced,
+          totalFailed,
+          totalImages,
+          currentPage: data.lastPageFetched,
+        });
+
+        if (!data.hasMore) break;
+        nextPage = data.nextPage;
+      }
+
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['bling-sync-stats'] });
       toast({
         title: 'Sincronização concluída!',
-        description: `${data.synced} produtos sincronizados, ${data.failed} falhas.`,
+        description: `${totalSynced} produtos OK, ${totalFailed} falharam, ${totalImages} imagens atualizadas.`,
       });
-    },
-    onError: (error: any) => {
+    } catch (e) {
       toast({
         title: 'Erro na sincronização',
-        description: error.message || 'Não foi possível sincronizar produtos.',
+        description: e instanceof Error ? e.message : 'Erro desconhecido',
         variant: 'destructive',
       });
-    },
-  });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   // Get sync stats
   const { data: syncStats } = useQuery({
@@ -200,16 +250,46 @@ const AdminBlingPage: React.FC = () => {
             </div>
           )}
 
-          <Button 
-            onClick={() => syncProductsMutation.mutate()}
-            disabled={!connectionStatus?.connected || syncProductsMutation.isPending}
+          <div className="flex items-start gap-3 p-3 bg-muted/50 rounded-lg">
+            <Switch
+              id="skip-image-detail"
+              checked={skipImageDetail}
+              onCheckedChange={setSkipImageDetail}
+              disabled={isSyncing}
+            />
+            <div className="space-y-0.5">
+              <Label htmlFor="skip-image-detail" className="cursor-pointer">
+                Sync rápido (sem fotos HD)
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Ative pra trazer só dados do produto e usar a thumbnail. Bom pra primeira sync;
+                depois desativa e roda de novo pra baixar as fotos em alta resolução.
+              </p>
+            </div>
+          </div>
+
+          {isSyncing && progress.totalSynced > 0 && (
+            <div className="p-3 bg-primary/5 border border-primary/20 rounded-lg text-sm space-y-1">
+              <p>
+                <strong>{progress.totalSynced}</strong> produtos sincronizados
+                {progress.totalFailed > 0 && ` · ${progress.totalFailed} falhas`}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {progress.totalImages} imagens atualizadas · página {progress.currentPage}
+              </p>
+            </div>
+          )}
+
+          <Button
+            onClick={runFullSync}
+            disabled={!connectionStatus?.connected || isSyncing}
             className="w-full"
             size="lg"
           >
-            {syncProductsMutation.isPending ? (
+            {isSyncing ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Sincronizando...
+                Sincronizando lote {progress.currentPage > 0 ? `(${progress.totalSynced} prontos)` : '...'}
               </>
             ) : (
               <>

@@ -8,6 +8,13 @@ const corsHeaders = {
 
 const BLING_API_BASE = 'https://www.bling.com.br/Api/v3';
 
+// Bling tem limite de ~3 req/seg. Mantemos 350ms entre calls.
+const BLING_THROTTLE_MS = 350;
+// Quantos produtos processar por execucao da function (evita timeout do edge runtime)
+const DEFAULT_BATCH_SIZE = 80;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -18,10 +25,15 @@ serve(async (req) => {
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const BLING_CLIENT_ID = Deno.env.get('BLING_CLIENT_ID')!;
     const BLING_CLIENT_SECRET = Deno.env.get('BLING_CLIENT_SECRET')!;
-    
+
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    console.log('Starting Bling product sync...');
+    const body = await req.json().catch(() => ({} as Record<string, unknown>));
+    const batchSize = Number((body as { batchSize?: number }).batchSize) || DEFAULT_BATCH_SIZE;
+    const skipImageDetail = Boolean((body as { skipImageDetail?: boolean }).skipImageDetail);
+    const startPage = Math.max(1, Number((body as { startPage?: number }).startPage) || 1);
+
+    console.log(`Starting Bling product sync — batchSize=${batchSize} skipImageDetail=${skipImageDetail} startPage=${startPage}`);
 
     // Get access token
     const { data: tokenData, error: tokenError } = await supabase
@@ -39,7 +51,7 @@ serve(async (req) => {
     const expiresAt = new Date(tokenData.expires_at);
     const now = new Date();
 
-    // Refresh token if expired
+    // Refresh token if expired (or expiring in <5 min)
     if (expiresAt.getTime() - now.getTime() < 300000) {
       console.log('Token expired, refreshing...');
       const credentials = btoa(`${BLING_CLIENT_ID}:${BLING_CLIENT_SECRET}`);
@@ -70,51 +82,28 @@ serve(async (req) => {
       accessToken = newTokenData.access_token;
     }
 
-    // Fetch products from Bling
-    const allProducts: any[] = [];
-    let page = 1;
-    let hasMore = true;
-
-    while (hasMore && page <= 10) {
-      const response = await fetch(`${BLING_API_BASE}/produtos?pagina=${page}&limite=100`, {
+    // ---- Helpers ----
+    // Bling fetch com retry no 429 (rate limit). Espera Retry-After se presente.
+    const blingFetch = async (path: string, attempt = 1): Promise<Response> => {
+      const resp = await fetch(`${BLING_API_BASE}${path}`, {
         headers: {
           'Authorization': `Bearer ${accessToken}`,
           'Accept': 'application/json',
         },
       });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Bling API error: ${response.status} - ${errorText}`);
+      if (resp.status === 429 && attempt <= 4) {
+        const retryAfter = Number(resp.headers.get('retry-after')) || 2;
+        console.log(`429 on ${path}, sleeping ${retryAfter}s (attempt ${attempt}/4)`);
+        await sleep(retryAfter * 1000);
+        return blingFetch(path, attempt + 1);
       }
+      return resp;
+    };
 
-      const result = await response.json();
-      if (result.data && result.data.length > 0) {
-        allProducts.push(...result.data);
-        page++;
-        hasMore = result.data.length === 100;
-      } else {
-        hasMore = false;
-      }
-    }
-
-    console.log(`Fetched ${allProducts.length} products from Bling`);
-
-    let synced = 0;
-    let failed = 0;
-    let imagesUpdated = 0;
-
-    // Helper: extrai URLs de imagem em alta resolu\u00e7\u00e3o do detalhe do produto Bling.
-    // A listagem (/produtos) s\u00f3 retorna `imagemURL` (thumbnail).
-    // O detalhe (/produtos/{id}) tem `midia.imagens.{externas,internas}` em tamanho cheio.
+    // Helper: extrai URLs de imagem em alta resolucao do detalhe do produto Bling.
     const fetchHighResImages = async (blingProductId: string): Promise<string[]> => {
       try {
-        const detailResp = await fetch(`${BLING_API_BASE}/produtos/${blingProductId}`, {
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Accept': 'application/json',
-          },
-        });
+        const detailResp = await blingFetch(`/produtos/${blingProductId}`);
         if (!detailResp.ok) return [];
         const detail = await detailResp.json();
         const midia = detail?.data?.midia?.imagens;
@@ -124,9 +113,7 @@ serve(async (req) => {
         const internas: string[] = (midia?.internas ?? [])
           .map((img: { link?: string }) => img?.link)
           .filter(Boolean);
-        // Prioriza externas (geralmente j\u00e1 est\u00e3o em CDN/alta resolu\u00e7\u00e3o).
         const all = [...externas, ...internas];
-        // Dedup preservando ordem
         return Array.from(new Set(all));
       } catch (e) {
         console.error('Failed to fetch detail for', blingProductId, e);
@@ -136,8 +123,7 @@ serve(async (req) => {
 
     const syncProductImages = async (productDbId: string, urls: string[], fallback?: string) => {
       const list = urls.length > 0 ? urls : fallback ? [fallback] : [];
-      if (list.length === 0) return;
-      // Strategy: replace all images on every sync para refletir o estado do Bling.
+      if (list.length === 0) return false;
       await supabase.from('product_images').delete().eq('product_id', productDbId);
       const rows = list.map((url, index) => ({
         product_id: productDbId,
@@ -148,16 +134,42 @@ serve(async (req) => {
       const { error: insertImgError } = await supabase.from('product_images').insert(rows);
       if (insertImgError) {
         console.error('Failed to insert product images:', productDbId, insertImgError);
-        return;
+        return false;
       }
-      imagesUpdated++;
+      return true;
     };
 
-    for (const product of allProducts) {
+    // ---- 1) Listagem de produtos com paginacao ate completar o batch ----
+    const collected: any[] = [];
+    let page = startPage;
+    let lastPageFetched = startPage - 1;
+    while (collected.length < batchSize && page <= 50) {
+      const response = await blingFetch(`/produtos?pagina=${page}&limite=100`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Bling API error (listagem pagina ${page}): ${response.status} - ${errorText}`);
+      }
+      const result = await response.json();
+      const items = (result?.data ?? []) as any[];
+      if (items.length === 0) break;
+      collected.push(...items);
+      lastPageFetched = page;
+      page++;
+      if (items.length < 100) break;
+      await sleep(BLING_THROTTLE_MS);
+    }
+
+    const toProcess = collected.slice(0, batchSize);
+    console.log(`Pagina inicial=${startPage}, ultima pagina lida=${lastPageFetched}, coletados=${collected.length}, processando=${toProcess.length}`);
+
+    let synced = 0;
+    let failed = 0;
+    let imagesUpdated = 0;
+
+    for (const product of toProcess) {
       try {
         const productId = product.id.toString();
 
-        // Cache product data
         await supabase
           .from('bling_products_cache')
           .upsert({
@@ -166,17 +178,22 @@ serve(async (req) => {
             synced_at: new Date().toISOString(),
           }, { onConflict: 'bling_product_id' });
 
-        // Create slug
-        const slug = product.nome
+        const rawName = (product.nome ?? '').toString();
+        if (!rawName.trim()) {
+          failed++;
+          continue;
+        }
+
+        const slug = rawName
           .toLowerCase()
           .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[̀-ͯ]/g, '')
           .replace(/[^a-z0-9]+/g, '-')
           .replace(/^-|-$/g, '');
 
         const productData = {
           sku: product.codigo || productId,
-          name: product.nome,
+          name: rawName,
           slug: `${slug}-${productId}`,
           description: product.descricaoCurta || product.observacoes || null,
           price: parseFloat(product.preco) || 0,
@@ -186,7 +203,6 @@ serve(async (req) => {
           brand: product.marca || null,
         };
 
-        // Check if product exists
         const { data: existingProduct } = await supabase
           .from('products')
           .select('id')
@@ -223,9 +239,13 @@ serve(async (req) => {
         }
 
         if (dbProductId) {
-          // Pega as imagens HD do detalhe do produto. Fallback: imagemURL (thumbnail).
-          const hdImages = await fetchHighResImages(productId);
-          await syncProductImages(dbProductId, hdImages, product.imagemURL);
+          let hdImages: string[] = [];
+          if (!skipImageDetail) {
+            hdImages = await fetchHighResImages(productId);
+            await sleep(BLING_THROTTLE_MS);
+          }
+          const updated = await syncProductImages(dbProductId, hdImages, product.imagemURL);
+          if (updated) imagesUpdated++;
         }
 
         synced++;
@@ -235,16 +255,28 @@ serve(async (req) => {
       }
     }
 
-    console.log(`Sync complete. Synced: ${synced}, Failed: ${failed}`);
+    const nextPage = collected.length >= batchSize ? lastPageFetched : lastPageFetched + 1;
+    const hasMore = collected.length >= batchSize;
+
+    console.log(`Sync complete. Synced=${synced} Failed=${failed} Images=${imagesUpdated} HasMore=${hasMore} NextPage=${nextPage}`);
 
     return new Response(
-      JSON.stringify({ success: true, synced, failed, imagesUpdated, total: allProducts.length }),
+      JSON.stringify({
+        success: true,
+        synced,
+        failed,
+        imagesUpdated,
+        total: toProcess.length,
+        hasMore,
+        nextPage,
+        lastPageFetched,
+      }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
     );
   } catch (error) {
     console.error('Product sync error:', error);
     return new Response(
-      JSON.stringify({ success: false, error: error.message }),
+      JSON.stringify({ success: false, error: error instanceof Error ? error.message : String(error) }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
     );
   }

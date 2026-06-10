@@ -155,19 +155,44 @@ export const useBlingConnection = () => {
   });
 };
 
-// Hook to sync products from Bling
+// Hook to sync products from Bling.
+// O backend processa em lotes (ver bling-sync-products) e devolve `hasMore`
+// + `nextPage` para o front continuar chamando ate terminar.
+interface SyncOptions {
+  batchSize?: number;
+  skipImageDetail?: boolean;
+  startPage?: number;
+}
+
+interface SyncResult {
+  success: boolean;
+  synced: number;
+  failed: number;
+  imagesUpdated: number;
+  total: number;
+  hasMore: boolean;
+  nextPage: number;
+  lastPageFetched: number;
+  error?: string;
+}
+
 export const useSyncBlingProducts = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async () => {
-      const { data, error } = await supabase.functions.invoke('bling-sync-products');
+    mutationFn: async (options: SyncOptions = {}): Promise<SyncResult> => {
+      const { data, error } = await supabase.functions.invoke('bling-sync-products', {
+        body: options,
+      });
       if (error) throw error;
-      return data;
+      return data as SyncResult;
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
-      toast.success(`Sincronização concluída! ${data.synced} produtos atualizados.`);
+      const msg = data.hasMore
+        ? `Lote OK — ${data.synced} atualizados, ${data.failed} falharam. Continuando...`
+        : `Sincronização concluída! ${data.synced} produtos atualizados.`;
+      toast.success(msg);
     },
     onError: (error) => {
       console.error('Sync error:', error);
