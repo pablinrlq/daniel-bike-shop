@@ -163,7 +163,7 @@ const AdminBlingPage: React.FC = () => {
             <div className="pt-4 border-t">
               <h4 className="font-medium mb-2">URL de Callback (para configurar no Bling):</h4>
               <code className="block p-3 bg-muted rounded text-sm break-all">
-                https://rqpgexsonigkrwhdlznm.supabase.co/functions/v1/bling-oauth-callback
+                {`${import.meta.env.VITE_SUPABASE_URL ?? ''}/functions/v1/bling-oauth-callback`}
               </code>
             </div>
           )}
