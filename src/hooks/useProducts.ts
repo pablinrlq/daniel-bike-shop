@@ -179,3 +179,42 @@ export const useCategories = () => {
     },
   });
 };
+
+export interface NavCategory {
+  id: string;
+  name: string;
+  slug: string;
+}
+
+/**
+ * Categorias para mostrar na navbar/footer.
+ * Filtra: só categorias ativas que têm pelo menos 1 produto ativo com estoque.
+ * Assim a nav nunca leva pra uma listagem vazia.
+ */
+export const useNavCategories = () => {
+  return useQuery({
+    queryKey: ['nav-categories'],
+    queryFn: async (): Promise<NavCategory[]> => {
+      const { data, error } = await supabase
+        .from('categories')
+        .select('id, name, slug, products!inner(id)')
+        .eq('is_active', true)
+        .eq('products.is_active', true)
+        .gt('products.stock_quantity', 0)
+        .order('name');
+
+      if (error) throw error;
+      // O inner join devolve a categoria com array de produtos; só queremos a categoria.
+      // E como uma categoria pode vir várias vezes, deduplica por id.
+      const seen = new Set<string>();
+      const result: NavCategory[] = [];
+      for (const row of data ?? []) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        result.push({ id: row.id, name: row.name, slug: row.slug });
+      }
+      return result;
+    },
+    staleTime: 5 * 60 * 1000, // 5 min
+  });
+};

@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { useCart } from '@/contexts/CartContext';
 import { useWishlist } from '@/contexts/WishlistContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { useNavCategories } from '@/hooks/useProducts';
 import { useEffect, useState } from 'react';
 import logo from '@/assets/logo.png';
 import SearchBar from '@/components/SearchBar';
@@ -12,15 +13,17 @@ const Header = () => {
   const { itemCount } = useCart();
   const { wishlistCount } = useWishlist();
   const { user } = useAuth();
+  const { data: navCategories } = useNavCategories();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const location = useLocation();
 
   const navLinks = [
     { name: 'Início', path: '/' },
-    { name: 'Bicicletas', path: '/produtos?categoria=bicicletas' },
-    { name: 'Peças', path: '/produtos?categoria=pecas' },
-    { name: 'Acessórios', path: '/produtos?categoria=acessorios' },
+    ...(navCategories ?? []).map((cat) => ({
+      name: cat.name,
+      path: `/produtos?categoria=${cat.slug}`,
+    })),
     { name: 'Sobre', path: '/sobre' },
   ];
 

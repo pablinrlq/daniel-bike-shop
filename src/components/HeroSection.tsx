@@ -155,11 +155,6 @@ const HeroSection = () => {
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </Button>
             </Link>
-            <Link to="/produtos?categoria=bicicletas">
-              <Button variant="outline" size="lg" className="w-full sm:w-auto">
-                Bicicletas
-              </Button>
-            </Link>
           </div>
         </div>
       </div>

@@ -2,8 +2,10 @@ import { Link } from 'react-router-dom';
 import { MapPin, Phone, Instagram } from 'lucide-react';
 import logo from '@/assets/logo.png';
 import Newsletter from '@/components/Newsletter';
+import { useNavCategories } from '@/hooks/useProducts';
 
 const Footer = () => {
+  const { data: navCategories } = useNavCategories();
   return (
     <footer className="bg-card border-t border-border">
       <div className="container mx-auto px-4 py-12">
@@ -31,20 +33,20 @@ const Footer = () => {
                 </Link>
               </li>
               <li>
-                <Link to="/produtos?categoria=bicicletas" className="text-sm text-muted-foreground hover:text-primary transition-colors">
-                  Bicicletas
+                <Link to="/produtos" className="text-sm text-muted-foreground hover:text-primary transition-colors">
+                  Produtos
                 </Link>
               </li>
-              <li>
-                <Link to="/produtos?categoria=pecas" className="text-sm text-muted-foreground hover:text-primary transition-colors">
-                  Peças
-                </Link>
-              </li>
-              <li>
-                <Link to="/produtos?categoria=acessorios" className="text-sm text-muted-foreground hover:text-primary transition-colors">
-                  Acessórios
-                </Link>
-              </li>
+              {(navCategories ?? []).map((cat) => (
+                <li key={cat.id}>
+                  <Link
+                    to={`/produtos?categoria=${cat.slug}`}
+                    className="text-sm text-muted-foreground hover:text-primary transition-colors"
+                  >
+                    {cat.name}
+                  </Link>
+                </li>
+              ))}
               <li>
                 <Link to="/favoritos" className="text-sm text-muted-foreground hover:text-primary transition-colors">
                   Lista de Desejos
