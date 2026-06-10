@@ -23,7 +23,7 @@ import {
   userToContact,
 } from '@/lib/whatsapp';
 
-const SITE_URL = (import.meta.env.VITE_SITE_URL as string | undefined) || 'https://danielbikeshop.com.br';
+const SITE_URL = (import.meta.env.VITE_SITE_URL as string | undefined) || 'https://danielbikeshop.com';
 
 const ProductDetailPage = () => {
   const { id } = useParams();

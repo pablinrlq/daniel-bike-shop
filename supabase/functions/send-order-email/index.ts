@@ -85,7 +85,7 @@ serve(async (req) => {
     const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
-    const RESEND_FROM = Deno.env.get('RESEND_FROM') || 'Daniel Bike Shop <no-reply@danielbikeshop.com.br>';
+    const RESEND_FROM = Deno.env.get('RESEND_FROM') || 'Daniel Bike Shop <no-reply@danielbikeshop.com>';
 
     if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
       throw new Error('Missing Supabase env vars');

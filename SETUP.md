@@ -79,7 +79,7 @@ No painel: **Authentication → Providers → Email**
 
 - ✅ Enable email signup
 - ✅ Confirm email (recomendado em prod; pode deixar OFF em dev pra testar mais rápido)
-- **Site URL**: a URL pública do site (ex. `https://danielbikeshop.com.br`). Em dev: `http://localhost:8080`
+- **Site URL**: a URL pública do site (ex. `https://danielbikeshop.com`). Em dev: `http://localhost:8080`
 - **Redirect URLs**: adicione a URL pública + `http://localhost:8080` (o `signUp` redireciona para `/conta`)
 
 ### 3.1) Criar o primeiro admin
@@ -130,7 +130,7 @@ supabase secrets set RESEND_API_KEY="re_xxxxxxxxxxxxxxxx"
 supabase secrets set RESEND_FROM="Daniel Bike Shop <no-reply@seudominio.com.br>"
 
 # URL pública do site (usada pelo MP para back_urls)
-supabase secrets set PUBLIC_SITE_URL="https://danielbikeshop.com.br"
+supabase secrets set PUBLIC_SITE_URL="https://danielbikeshop.com"
 
 # Bling (se for manter a integração)
 supabase secrets set BLING_CLIENT_ID="..."
@@ -191,7 +191,7 @@ Se você não configurar o Resend, o app **continua funcionando** — a função
 
 ## 9) Imagem para Open Graph
 
-Adicione `public/og-image.jpg` (1200×630, < 1 MB). Esse é o preview do site no WhatsApp/Facebook/Twitter. O `index.html` já referencia `https://danielbikeshop.com.br/og-image.jpg` — ajuste o domínio se for outro.
+Adicione `public/og-image.jpg` (1200×630, < 1 MB). Esse é o preview do site no WhatsApp/Facebook/Twitter. O `index.html` já referencia `https://danielbikeshop.com/og-image.jpg` — ajuste o domínio se for outro.
 
 ---
 
