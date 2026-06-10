@@ -9,9 +9,10 @@
   "lang": "pt-BR",
   "icons": [
     {
-      "src": "/favicon.ico",
+      "src": "/logo.png",
       "sizes": "any",
-      "type": "image/x-icon"
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ]
 }
