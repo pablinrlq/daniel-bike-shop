@@ -87,6 +87,14 @@ const ProductCard = ({ product }: ProductCardProps) => {
           className="absolute inset-0 w-full h-full object-contain p-4 group-hover:scale-105 transition-transform duration-500"
         />
 
+        {/* Link cobrindo a imagem — no mobile (sem hover) é o que torna o card
+            clicável; toca em qualquer lugar da foto e abre o produto. */}
+        <Link
+          to={`/produto/${product.slug || product.id}`}
+          className="absolute inset-0 z-[1]"
+          aria-label={`Ver ${product.name}`}
+        />
+
         {/* Wishlist (canto superior direito) */}
         <div className="absolute top-2 right-2 z-10">
           <WishlistButton
@@ -111,21 +119,22 @@ const ProductCard = ({ product }: ProductCardProps) => {
         </div>
 
         {isOutOfStock && (
-          <div className="absolute inset-0 bg-white/70 backdrop-blur-[1px] flex items-center justify-center">
+          <div className="absolute inset-0 z-[2] pointer-events-none bg-white/70 backdrop-blur-[1px] flex items-center justify-center">
             <span className="bg-foreground/90 text-background font-semibold px-3 py-1 rounded text-sm uppercase tracking-wider">
               Esgotado
             </span>
           </div>
         )}
         {!isStoreOpen && !isOutOfStock && (
-          <div className="absolute inset-0 bg-white/70 backdrop-blur-[1px] flex items-center justify-center">
+          <div className="absolute inset-0 z-[2] pointer-events-none bg-white/70 backdrop-blur-[1px] flex items-center justify-center">
             <span className="bg-foreground/90 text-background font-semibold px-3 py-1 rounded text-sm uppercase tracking-wider">
               Loja Fechada
             </span>
           </div>
         )}
-        {/* Overlay com botoes — aparece no hover (desktop) e via touch (mobile) */}
-        <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/70 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+        {/* Overlay com botoes — só no hover (desktop). pointer-events-none
+            enquanto escondido pra não roubar o toque do link no mobile. */}
+        <div className="absolute bottom-0 left-0 right-0 z-[2] p-3 bg-gradient-to-t from-black/70 via-black/40 to-transparent opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity duration-200">
           <div className="flex gap-2">
             <Link to={`/produto/${product.slug || product.id}`} className="flex-1">
               <Button variant="secondary" size="sm" className="w-full gap-1">
@@ -161,9 +170,12 @@ const ProductCard = ({ product }: ProductCardProps) => {
         <span className="text-[11px] text-muted-foreground uppercase tracking-wider">
           {product.category}
         </span>
-        <h3 className="font-semibold mt-1 line-clamp-2 leading-snug min-h-[2.6rem]">
-          {product.name}
-        </h3>
+        <Link
+          to={`/produto/${product.slug || product.id}`}
+          className="font-semibold mt-1 line-clamp-2 leading-snug min-h-[2.6rem] hover:text-primary transition-colors"
+        >
+          <h3>{product.name}</h3>
+        </Link>
         <div className="mt-auto pt-3 flex items-baseline gap-2 flex-wrap">
           <span className="text-lg font-bold text-primary">{formatPrice(product.price)}</span>
           {product.originalPrice && (

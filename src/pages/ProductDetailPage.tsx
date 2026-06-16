@@ -316,7 +316,7 @@ const ProductDetailPage = () => {
           {relatedProducts.length > 0 && (
             <section className="mt-16 pt-16 border-t border-border">
               <h2 className="text-2xl font-bold mb-8">Produtos Relacionados</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-6">
                 {relatedProducts.map(p => (
                   <ProductCard key={p.id} product={p} />
                 ))}
@@ -349,7 +349,11 @@ const ProductJsonLd = ({ product }: { product: any }) => {
       '@type': 'Product',
       name: product.name,
       description: product.description,
-      image: product.images?.length ? product.images : [product.image],
+      // Só fotos reais do produto no schema.org — fora as ilustrativas de
+      // fallback (plaquinha em data URI ou foto de categoria em /categorias).
+      image: (product.images || [product.image]).filter(
+        (src: string) => src && !src.startsWith('data:') && !src.startsWith('/categorias/'),
+      ),
       sku: product.id,
       brand: product.brand ? { '@type': 'Brand', name: product.brand } : undefined,
       offers: {

@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { Tables } from '@/integrations/supabase/types';
+import { fallbackImageFor, categorizeByName } from '@/lib/productFallback';
+import { overrideImageForSku } from '@/lib/productImageOverrides';
 
 export type DbProduct = Tables<'products'> & {
   category: Tables<'categories'> | null;
@@ -32,9 +34,16 @@ export interface Product {
 }
 
 const transformProduct = (dbProduct: DbProduct): Product => {
+  const hasOwnImage = (dbProduct.images?.length ?? 0) > 0;
+  // Sem foto do Bling: 1º tenta a foto OFICIAL curada por SKU; senão cai na
+  // foto/plaquinha da categoria, inferida pelo nome. Nunca quebra.
+  const fallback = overrideImageForSku(dbProduct.sku) ?? fallbackImageFor(dbProduct.name);
   const primaryImage = dbProduct.images?.find(img => img.is_primary);
-  const mainImage = primaryImage?.image_url || dbProduct.images?.[0]?.image_url || '/placeholder.svg';
-  
+  const mainImage = primaryImage?.image_url || dbProduct.images?.[0]?.image_url || fallback;
+  // Sem categoria no banco? Usa a categoria inferida pelo nome ("Quadro",
+  // "Pneu"...) no lugar de "Sem categoria". Não afeta o filtro (que usa o slug).
+  const categoryLabel = dbProduct.category?.name || categorizeByName(dbProduct.name).label;
+
   return {
     id: dbProduct.id,
     slug: dbProduct.slug,
@@ -43,11 +52,13 @@ const transformProduct = (dbProduct: DbProduct): Product => {
     price: dbProduct.promotional_price || dbProduct.price,
     originalPrice: dbProduct.promotional_price ? dbProduct.price : undefined,
     promotionalPrice: dbProduct.promotional_price || undefined,
-    category: dbProduct.category?.name || 'Sem categoria',
+    category: categoryLabel,
     categorySlug: dbProduct.category?.slug || 'outros',
     image: mainImage,
     primaryImage: mainImage,
-    images: dbProduct.images?.sort((a, b) => a.display_order - b.display_order).map(img => img.image_url) || [mainImage],
+    images: hasOwnImage
+      ? dbProduct.images.sort((a, b) => a.display_order - b.display_order).map(img => img.image_url)
+      : [mainImage],
     stock: dbProduct.stock_quantity,
     featured: dbProduct.is_featured,
     brand: dbProduct.brand || undefined,
