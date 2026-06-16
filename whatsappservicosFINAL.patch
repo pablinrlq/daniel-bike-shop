@@ -1,0 +1,2549 @@
+From cd084d12b6d1e461d55d582c6357047fe0d0ddf5 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 16 Jun 2026 01:27:22 +0000
+Subject: [PATCH 1/3] =?UTF-8?q?feat:=20atendente=20de=20WhatsApp=20com=20I?=
+ =?UTF-8?q?A=20(Claude)=20consultando=20pre=C3=A7os=20ao=20vivo?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- edge function whatsapp-webhook: webhook da Meta Cloud API + loop de tool use
+  do Claude, respondendo o WhatsApp da loja de forma autônoma
+- ferramentas: buscar_produtos, detalhes_produto, info_loja, escalar_humano
+  (consulta preço/estoque reais no Supabase, catalogo vindo do Bling)
+- migration: whatsapp_conversations/whatsapp_messages + toggle whatsapp_ai_enabled
+- handoff para humano, dedupe de reentrega, verificacao de assinatura (HMAC),
+  prompt caching e respostas curtas para velocidade
+- docs: README de setup da funcao + atualizacao do SETUP.md
+
+https://claude.ai/code/session_01EHjNeDs9ubktPMpL91pBBk
+---
+ SETUP.md                                      |   6 +
+ supabase/config.toml                          |   5 +
+ supabase/functions/whatsapp-webhook/README.md | 108 +++
+ supabase/functions/whatsapp-webhook/index.ts  | 617 ++++++++++++++++++
+ .../20260616000000_whatsapp_ai_attendant.sql  |  63 ++
+ 5 files changed, 799 insertions(+)
+ create mode 100644 supabase/functions/whatsapp-webhook/README.md
+ create mode 100644 supabase/functions/whatsapp-webhook/index.ts
+ create mode 100644 supabase/migrations/20260616000000_whatsapp_ai_attendant.sql
+
+diff --git a/SETUP.md b/SETUP.md
+index 6f69222..657e370 100644
+--- a/SETUP.md
++++ b/SETUP.md
+@@ -116,8 +116,14 @@ supabase functions deploy check-admin-exists
+ supabase functions deploy create-first-admin
+ supabase functions deploy admin-create-user
+ supabase functions deploy admin-delete-user
++supabase functions deploy whatsapp-webhook
+ ```
+ 
++> **Atendente de WhatsApp com IA (Claude):** a função `whatsapp-webhook` faz o
++> WhatsApp responder sozinho, consultando preço/estoque reais. O passo a passo
++> completo (Meta Cloud API, segredos, escolha de modelo) está em
++> [`supabase/functions/whatsapp-webhook/README.md`](./supabase/functions/whatsapp-webhook/README.md).
++
+ ### 5.2) Secrets
+ 
+ ```bash
+diff --git a/supabase/config.toml b/supabase/config.toml
+index 9cb2182..126bdbc 100644
+--- a/supabase/config.toml
++++ b/supabase/config.toml
+@@ -39,3 +39,8 @@ verify_jwt = false
+ # Envio de e-mail transacional é chamado por outras edge functions e por webhooks.
+ [functions.send-order-email]
+ verify_jwt = false
++
++# WhatsApp webhook é chamado pelos servidores da Meta, sem JWT.
++# Verificação de assinatura (X-Hub-Signature-256) é feita dentro da função.
++[functions.whatsapp-webhook]
++verify_jwt = false
+diff --git a/supabase/functions/whatsapp-webhook/README.md b/supabase/functions/whatsapp-webhook/README.md
+new file mode 100644
+index 0000000..a374af5
+--- /dev/null
++++ b/supabase/functions/whatsapp-webhook/README.md
+@@ -0,0 +1,108 @@
++# Atendente de WhatsApp com IA (Claude)
++
++Edge function que faz o WhatsApp da loja responder **sozinho**, como um atendente:
++entende a pergunta, **consulta preço e estoque reais no catálogo** (que vem do Bling),
++manda o link do produto, e sabe **passar para um humano** quando precisa.
++
++```
++Cliente no WhatsApp
++      │
++      ▼
++Meta WhatsApp Cloud API  ──(webhook POST)──►  whatsapp-webhook (esta função)
++                                                   │
++                          ┌────────────────────────┼─────────────────────────┐
++                          ▼                         ▼                          ▼
++                   Claude API (tool use)     Supabase (produtos,        Meta Cloud API
++                   gera a resposta           preços, conversas)         (envia a resposta)
++```
++
++A IA usa **tool use** (function calling) para buscar dados reais — ela nunca
++"chuta" preço. As ferramentas: `buscar_produtos`, `detalhes_produto`,
++`info_loja`, `escalar_humano`.
++
++---
++
++## 1. Pré-requisitos na Meta (WhatsApp Cloud API — oficial e gratuita p/ receber)
++
++1. Crie uma conta no [Meta for Developers](https://developers.facebook.com/) e um **app** do tipo *Business*.
++2. Adicione o produto **WhatsApp**. A Meta te dá um **número de teste** na hora (pode testar já); para produção, conecte o número da loja e verifique o negócio.
++3. Anote:
++   - **Phone number ID** → `WHATSAPP_PHONE_NUMBER_ID`
++   - **Token** de acesso → `WHATSAPP_TOKEN` (gere um **token permanente** via System User; o token temporário expira em 24h)
++   - **App Secret** (App settings → Basic) → `WHATSAPP_APP_SECRET`
++4. Escolha um texto secreto qualquer para `WHATSAPP_VERIFY_TOKEN` (você inventa).
++
++## 2. Segredos (Supabase)
++
++```bash
++# IA
++supabase secrets set ANTHROPIC_API_KEY="sk-ant-..."
++# Opcional: modelo. Padrão é claude-opus-4-8. Para WhatsApp recomendo velocidade:
++supabase secrets set CLAUDE_MODEL="claude-haiku-4-5"   # rápido e barato (ou claude-sonnet-4-6)
++
++# WhatsApp (Meta)
++supabase secrets set WHATSAPP_TOKEN="EAAG..."
++supabase secrets set WHATSAPP_PHONE_NUMBER_ID="123456789012345"
++supabase secrets set WHATSAPP_VERIFY_TOKEN="um_texto_secreto_que_voce_inventa"
++supabase secrets set WHATSAPP_APP_SECRET="xxxxxxxxxxxxxxxx"        # recomendado (valida a assinatura)
++supabase secrets set WHATSAPP_OWNER_NUMBER="5531999999999"        # opcional: recebe aviso de handoff
++
++# Já deve existir do resto do projeto:
++supabase secrets set PUBLIC_SITE_URL="https://danielbikeshop.com"
++```
++
++> `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` já são injetados automaticamente.
++
++## 3. Banco + deploy
++
++```bash
++supabase db push                              # cria as tabelas de conversa (migration)
++supabase functions deploy whatsapp-webhook
++```
++
++## 4. Apontar o webhook na Meta
++
++No painel do app (WhatsApp → Configuration → Webhook):
++
++- **Callback URL:** `https://SEU_PROJECT_REF.supabase.co/functions/v1/whatsapp-webhook`
++- **Verify token:** o mesmo valor de `WHATSAPP_VERIFY_TOKEN`
++- Clique em **Verify and save** (a função responde o handshake `GET`).
++- Em **Webhook fields**, assine o campo **`messages`**.
++
++Pronto. Mande uma mensagem para o número e o atendente responde.
++
++---
++
++## Escolha do modelo (velocidade × custo × qualidade)
++
++Troque com `CLAUDE_MODEL` — sem mexer no código:
++
++| Modelo | ID | Quando usar | Preço (entrada / saída por 1M tokens) |
++| --- | --- | --- | --- |
++| Haiku 4.5 | `claude-haiku-4-5` | **Recomendado p/ WhatsApp** — mais rápido e barato; ótimo p/ FAQ/preços | US$ 1 / US$ 5 |
++| Sonnet 4.6 | `claude-sonnet-4-6` | Equilíbrio; respostas mais "espertas" | US$ 3 / US$ 15 |
++| Opus 4.8 | `claude-opus-4-8` | Padrão do código; casos mais difíceis | US$ 5 / US$ 25 |
++
++A função já é otimizada para **velocidade**: sem "extended thinking", respostas
++curtas (`max_tokens` baixo), e **prompt caching** no system + ferramentas
++(leituras de cache custam ~10% do preço normal). Na prática, uma conversa
++típica custa centavos.
++
++## Como funciona o "não precisa de pessoa cuidando"
++
++- Responde 24/7, sozinho, com preço/estoque ao vivo.
++- **Handoff:** se o cliente pede uma pessoa (ou a IA não resolve), ela marca a
++  conversa como `human` e (se você configurar `WHATSAPP_OWNER_NUMBER`) te avisa.
++  Enquanto a conversa estiver como `human`, a IA fica em silêncio — o humano assume.
++- **Liga/desliga geral:** coluna `store_settings.whatsapp_ai_enabled` (dá para
++  expor um botão no admin depois).
++- Para devolver a conversa para a IA: mude o `status` da linha em
++  `whatsapp_conversations` de `human` para `bot`.
++
++## Limitações desta v1 (próximos passos fáceis)
++
++- Trata **texto**. Áudio/imagem recebidos ganham uma resposta padrão pedindo texto
++  (dá para adicionar transcrição de áudio e visão depois).
++- O catálogo é buscado por palavra-chave (ILIKE). Para busca semântica ("quero
++  uma bike pra trilha barata"), dá para adicionar embeddings + pgvector no Supabase.
++- Não cria pedido sozinho — direciona o cliente para finalizar no site (mais seguro).
+diff --git a/supabase/functions/whatsapp-webhook/index.ts b/supabase/functions/whatsapp-webhook/index.ts
+new file mode 100644
+index 0000000..9f955bb
+--- /dev/null
++++ b/supabase/functions/whatsapp-webhook/index.ts
+@@ -0,0 +1,617 @@
++// WhatsApp AI Attendant — Daniel Bike Shop
++//
++// Recebe mensagens do WhatsApp (Meta Cloud API), responde com a Claude API de
++// forma autônoma e consulta preços/estoque reais no Supabase (catálogo vindo do
++// Bling). Mantém memória de conversa por número e sabe transferir para um humano.
++//
++// Fluxo:
++//   GET  -> handshake de verificação do webhook da Meta (hub.challenge)
++//   POST -> recebe mensagens; responde 200 na hora e processa em background
++//           (a Meta exige resposta rápida, senão reenvia o evento).
++//
++// Segredos necessários (supabase secrets set ...): ver README.md desta função.
++
++import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
++import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
++import Anthropic from 'npm:@anthropic-ai/sdk';
++
++// ---- Config ----
++const GRAPH_VERSION = 'v21.0';
++const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
++// Modelo: padrão Opus 4.8 (mais capaz). Para WhatsApp, velocidade importa —
++// troque por "claude-haiku-4-5" (mais rápido/barato) ou "claude-sonnet-4-6"
++// (equilíbrio) só mudando o secret CLAUDE_MODEL. Ver README.
++const CLAUDE_MODEL = Deno.env.get('CLAUDE_MODEL') || 'claude-opus-4-8';
++const SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') || 'https://danielbikeshop.com').replace(/\/$/, '');
++const HISTORY_LIMIT = 20; // mensagens de contexto por conversa
++const MAX_TOOL_STEPS = 5; // trava de segurança no loop de ferramentas
++
++const formatBRL = (v: number) =>
++  new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(v) || 0);
++
++// Fatos que NÃO estão no banco (pagamento/frete). Edite aqui quando a política mudar.
++const STORE_FACTS = `Formas de pagamento: Pix e cartão de crédito/débito pelo site (Mercado Pago), ou combinar pelo WhatsApp.
++Frete: calculado no checkout do site. Política atual: frete grátis acima de R$ 299; abaixo disso, taxa fixa de R$ 29,90.
++Retirada: dá para combinar retirada na loja em Belo Horizonte/MG.
++Site da loja: ${SITE_URL}`;
++
++const SYSTEM_PROMPT = `Você é o atendente virtual da Daniel Bike Shop, uma loja de bicicletas, peças e acessórios em Belo Horizonte/MG. Você atende clientes pelo WhatsApp.
++
++Como você se comporta:
++- Fale como um vendedor brasileiro experiente e simpático: linguagem natural, calorosa e direta. Trate o cliente por "você".
++- Seja objetivo. Mensagem de WhatsApp é curta — nada de textão. Quebre em frases curtas.
++- NÃO use emojis.
++- Use *negrito* (asteriscos) com moderação, só para destacar nome de produto ou preço.
++- NUNCA invente preço, estoque, prazo ou informação da loja. Sempre use as ferramentas para consultar dados reais antes de falar sobre produtos, preços e disponibilidade.
++- Se o cliente perguntar de um produto, use "buscar_produtos". Se não achar, diga que não encontrou e ofereça alternativas próximas.
++- Sempre que citar um produto, mande o link dele.
++- Para fechar a compra, oriente o cliente a finalizar pelo site (mande o link do produto) ou ofereça chamar um atendente humano.
++- Se o cliente pedir para falar com uma pessoa, quiser negociar desconto fora do site, fizer uma reclamação séria, ou for algo que você não resolve, use "escalar_humano" e avise que um atendente vai assumir.
++- Se perguntarem se você é um robô/IA, pode dizer com naturalidade que é o assistente virtual da loja e que chama um humano quando precisa.
++
++Informações fixas da loja:
++${STORE_FACTS}
++
++Responda SEMPRE apenas com a mensagem final para o cliente, em português do Brasil. Não explique seu raciocínio nem diga quais ferramentas usou.`;
++
++// ---- Ferramentas que a IA pode chamar ----
++const TOOLS = [
++  {
++    name: 'buscar_produtos',
++    description:
++      'Busca produtos no catálogo da loja por nome, marca ou tipo. Use SEMPRE que o cliente perguntar sobre produtos, preços, disponibilidade ou quiser recomendações. Retorna nome, preço, estoque e link.',
++    input_schema: {
++      type: 'object',
++      properties: {
++        termo: {
++          type: 'string',
++          description:
++            "O que procurar: nome, marca ou tipo. Ex: 'mountain bike aro 29', 'capacete', 'câmbio shimano'.",
++        },
++        categoria: {
++          type: 'string',
++          description: 'Opcional. Filtra por categoria: bicicletas, pecas ou acessorios.',
++        },
++      },
++      required: ['termo'],
++    },
++  },
++  {
++    name: 'detalhes_produto',
++    description:
++      'Detalhes completos de um produto específico (descrição, especificações como aro, material do quadro, marchas, suspensão, estoque, preço e link). Use depois que a busca já identificou o produto.',
++    input_schema: {
++      type: 'object',
++      properties: {
++        slug: { type: 'string', description: 'slug do produto (retornado pela busca)' },
++      },
++      required: ['slug'],
++    },
++  },
++  {
++    name: 'info_loja',
++    description:
++      'Informações da loja: endereço, horário de funcionamento, contato, pagamento e frete. Use quando o cliente perguntar sobre a loja, entrega, pagamento ou horários.',
++    input_schema: { type: 'object', properties: {} },
++  },
++  {
++    name: 'escalar_humano',
++    description:
++      'Transfere a conversa para um atendente humano. Use quando o cliente pedir para falar com uma pessoa, quiser negociar, fizer reclamação séria, ou quando você não conseguir resolver. Depois de chamar, avise o cliente que um atendente vai assumir.',
++    input_schema: {
++      type: 'object',
++      properties: {
++        motivo: { type: 'string', description: 'Resumo curto do motivo, para o atendente.' },
++      },
++      required: ['motivo'],
++    },
++  },
++];
++
++// =====================================================================
++// Webhook HTTP
++// =====================================================================
++serve(async (req) => {
++  const url = new URL(req.url);
++
++  // --- Verificação do webhook (Meta chama via GET uma única vez) ---
++  if (req.method === 'GET') {
++    const verifyToken = Deno.env.get('WHATSAPP_VERIFY_TOKEN');
++    const mode = url.searchParams.get('hub.mode');
++    const token = url.searchParams.get('hub.verify_token');
++    const challenge = url.searchParams.get('hub.challenge');
++    if (mode === 'subscribe' && token && token === verifyToken) {
++      return new Response(challenge ?? '', { status: 200 });
++    }
++    return new Response('Forbidden', { status: 403 });
++  }
++
++  if (req.method !== 'POST') {
++    return new Response('Method Not Allowed', { status: 405 });
++  }
++
++  // Corpo cru para conferir a assinatura antes de confiar no conteúdo.
++  const rawBody = await req.text();
++
++  const appSecret = Deno.env.get('WHATSAPP_APP_SECRET');
++  if (appSecret) {
++    const ok = await verifyMetaSignature(req, rawBody, appSecret);
++    if (!ok) return new Response('invalid signature', { status: 401 });
++  }
++
++  let payload: any;
++  try {
++    payload = JSON.parse(rawBody);
++  } catch {
++    return new Response('bad json', { status: 400 });
++  }
++
++  // Extrai as mensagens de texto recebidas (ignora status de entrega etc.)
++  const incoming = extractMessages(payload);
++  if (incoming.length === 0) {
++    return new Response('ok', { status: 200 }); // nada para responder
++  }
++
++  const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
++  const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
++  const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY');
++  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !ANTHROPIC_API_KEY) {
++    console.error('Missing env: SUPABASE_URL / SERVICE_ROLE / ANTHROPIC_API_KEY');
++    return new Response('ok', { status: 200 }); // não peça reenvio à Meta por erro nosso
++  }
++
++  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
++  const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
++
++  // Toggle global: admin pode desligar a IA no painel.
++  const { data: settings } = await supabase
++    .from('store_settings')
++    .select('whatsapp_ai_enabled')
++    .limit(1)
++    .maybeSingle();
++  const aiEnabled = settings?.whatsapp_ai_enabled ?? true;
++
++  // Processa em background e responde 200 imediatamente (a Meta tem timeout curto).
++  const work = Promise.allSettled(
++    incoming.map((m) => handleMessage(supabase, anthropic, m, aiEnabled)),
++  );
++  // @ts-ignore — EdgeRuntime existe no runtime do Supabase, não nos tipos.
++  if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) {
++    // @ts-ignore
++    EdgeRuntime.waitUntil(work);
++  } else {
++    await work;
++  }
++
++  return new Response('ok', { status: 200 });
++});
++
++// =====================================================================
++// Processamento de uma mensagem
++// =====================================================================
++interface IncomingMessage {
++  from: string; // número do cliente (wa_id)
++  waId: string; // id da mensagem (wamid...) para dedupe
++  name?: string;
++  type: string;
++  text: string;
++}
++
++async function handleMessage(
++  supabase: SupabaseClient,
++  anthropic: Anthropic,
++  msg: IncomingMessage,
++  aiEnabled: boolean,
++) {
++  try {
++    const convo = await getOrCreateConversation(supabase, msg.from, msg.name);
++
++    // Salva a mensagem do cliente. Se o id já existe, é reentrega → ignora.
++    const isNew = await saveMessage(supabase, convo.id, 'user', msg.text || '(sem texto)', msg.waId);
++    if (!isNew) return;
++
++    await touchConversation(supabase, convo.id);
++
++    // IA desligada globalmente, ou um humano já assumiu esta conversa → não responde.
++    if (!aiEnabled || convo.status === 'human') return;
++
++    await markRead(msg.waId); // confirma leitura (sensação de atendimento ágil)
++
++    // Só processamos texto por enquanto.
++    if (msg.type !== 'text' || !msg.text) {
++      const fallback =
++        'Recebi sua mensagem. Por aqui consigo te ajudar melhor por texto. Pode me dizer o que você procura?';
++      await sendText(msg.from, fallback);
++      await saveMessage(supabase, convo.id, 'assistant', fallback, null);
++      return;
++    }
++
++    const history = await loadHistory(supabase, convo.id);
++    const reply = await runAI(anthropic, supabase, convo, history);
++
++    await sendText(msg.from, reply);
++    await saveMessage(supabase, convo.id, 'assistant', reply, null);
++    await touchConversation(supabase, convo.id);
++  } catch (e) {
++    console.error('handleMessage error:', e);
++  }
++}
++
++// =====================================================================
++// Claude — loop de tool use
++// =====================================================================
++async function runAI(
++  anthropic: Anthropic,
++  supabase: SupabaseClient,
++  convo: { id: string; phone: string; customer_name: string | null },
++  history: { role: 'user' | 'assistant'; content: string }[],
++): Promise<string> {
++  const messages: any[] = history.map((m) => ({ role: m.role, content: m.content }));
++
++  for (let step = 0; step < MAX_TOOL_STEPS; step++) {
++    const resp: any = await anthropic.messages.create({
++      model: CLAUDE_MODEL,
++      max_tokens: 1024,
++      // Cacheia o system + ferramentas (prefixo estável) → respostas mais rápidas e baratas.
++      system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
++      tools: TOOLS as any,
++      messages,
++    });
++
++    if (resp.stop_reason === 'tool_use') {
++      messages.push({ role: 'assistant', content: resp.content });
++      const results: any[] = [];
++      for (const block of resp.content) {
++        if (block.type === 'tool_use') {
++          const out = await runTool(supabase, convo, block.name, block.input);
++          results.push({ type: 'tool_result', tool_use_id: block.id, content: out });
++        }
++      }
++      messages.push({ role: 'user', content: results });
++      continue;
++    }
++
++    const text = (resp.content || [])
++      .filter((b: any) => b.type === 'text')
++      .map((b: any) => b.text)
++      .join('\n')
++      .trim();
++    if (text) return text;
++    break;
++  }
++
++  return 'Deixa eu chamar um atendente para te ajudar melhor, um instante.';
++}
++
++async function runTool(
++  supabase: SupabaseClient,
++  convo: { id: string; phone: string; customer_name: string | null },
++  name: string,
++  input: any,
++): Promise<string> {
++  try {
++    switch (name) {
++      case 'buscar_produtos':
++        return await buscarProdutos(supabase, input?.termo, input?.categoria);
++      case 'detalhes_produto':
++        return await detalhesProduto(supabase, input?.slug);
++      case 'info_loja':
++        return await infoLoja(supabase);
++      case 'escalar_humano':
++        return await escalarHumano(supabase, convo, input?.motivo);
++      default:
++        return JSON.stringify({ erro: 'ferramenta desconhecida' });
++    }
++  } catch (e) {
++    console.error('runTool error', name, e);
++    return JSON.stringify({ erro: 'Falha ao consultar. Tente novamente.' });
++  }
++}
++
++// ---- Implementações das ferramentas ----
++async function buscarProdutos(
++  supabase: SupabaseClient,
++  termo: string,
++  categoria?: string,
++): Promise<string> {
++  const safe = (termo || '').replace(/[,%()*]/g, ' ').trim().slice(0, 80);
++  if (!safe) return JSON.stringify({ resultados: [] });
++
++  let query = supabase
++    .from('products')
++    .select('name, slug, price, promotional_price, stock_quantity, brand, categories(name, slug)')
++    .eq('is_active', true)
++    .or(`name.ilike.%${safe}%,brand.ilike.%${safe}%`)
++    .limit(8);
++
++  const { data, error } = await query;
++  if (error) return JSON.stringify({ erro: 'Falha na busca.' });
++
++  let rows = data ?? [];
++  if (categoria) {
++    const c = categoria.toLowerCase();
++    rows = rows.filter(
++      (r: any) =>
++        r.categories?.slug?.toLowerCase().includes(c) ||
++        r.categories?.name?.toLowerCase().includes(c),
++    );
++  }
++
++  if (rows.length === 0) {
++    return JSON.stringify({ resultados: [], aviso: 'Nenhum produto encontrado para esse termo.' });
++  }
++
++  const resultados = rows.map((r: any) => {
++    const preco = r.promotional_price ?? r.price;
++    return {
++      nome: r.name,
++      marca: r.brand ?? undefined,
++      preco: formatBRL(preco),
++      preco_normal: r.promotional_price ? formatBRL(r.price) : undefined,
++      em_estoque: (r.stock_quantity ?? 0) > 0,
++      categoria: r.categories?.name ?? undefined,
++      link: `${SITE_URL}/produto/${r.slug}`,
++    };
++  });
++  return JSON.stringify({ resultados });
++}
++
++async function detalhesProduto(supabase: SupabaseClient, slug: string): Promise<string> {
++  if (!slug) return JSON.stringify({ erro: 'slug não informado' });
++  const { data, error } = await supabase
++    .from('products')
++    .select(
++      'name, slug, description, brand, model, price, promotional_price, stock_quantity, aro, material_quadro, marchas, suspensao, tamanho_quadro, categories(name)',
++    )
++    .eq('slug', slug)
++    .eq('is_active', true)
++    .maybeSingle();
++
++  if (error || !data) return JSON.stringify({ erro: 'Produto não encontrado.' });
++
++  const preco = data.promotional_price ?? data.price;
++  return JSON.stringify({
++    nome: data.name,
++    marca: data.brand ?? undefined,
++    modelo: data.model ?? undefined,
++    descricao: data.description ?? undefined,
++    preco: formatBRL(preco),
++    preco_normal: data.promotional_price ? formatBRL(data.price) : undefined,
++    em_estoque: (data.stock_quantity ?? 0) > 0,
++    estoque: data.stock_quantity ?? 0,
++    especificacoes: {
++      aro: data.aro ?? undefined,
++      material_quadro: data.material_quadro ?? undefined,
++      marchas: data.marchas ?? undefined,
++      suspensao: data.suspensao ?? undefined,
++      tamanho_quadro: data.tamanho_quadro ?? undefined,
++    },
++    categoria: (data as any).categories?.name ?? undefined,
++    link: `${SITE_URL}/produto/${data.slug}`,
++  });
++}
++
++async function infoLoja(supabase: SupabaseClient): Promise<string> {
++  const { data } = await supabase
++    .from('store_settings')
++    .select('store_name, address, city, state, working_hours, whatsapp, contact_email, instagram_url')
++    .limit(1)
++    .maybeSingle();
++
++  return JSON.stringify({
++    nome: data?.store_name ?? 'Daniel Bike Shop',
++    endereco: data?.address ?? undefined,
++    cidade: data?.city ?? 'Belo Horizonte',
++    estado: data?.state ?? 'MG',
++    horario: data?.working_hours ?? undefined,
++    contato: data?.contact_email ?? undefined,
++    instagram: data?.instagram_url ?? undefined,
++    pagamento_e_frete: STORE_FACTS,
++    site: SITE_URL,
++  });
++}
++
++async function escalarHumano(
++  supabase: SupabaseClient,
++  convo: { id: string; phone: string; customer_name: string | null },
++  motivo: string,
++): Promise<string> {
++  await supabase.from('whatsapp_conversations').update({ status: 'human' }).eq('id', convo.id);
++
++  // Avisa o dono/atendente, se houver um número configurado.
++  const owner = Deno.env.get('WHATSAPP_OWNER_NUMBER');
++  if (owner) {
++    await sendText(
++      owner,
++      `Atendimento humano solicitado.\nCliente: ${convo.customer_name || convo.phone}\nMotivo: ${motivo || 'não informado'}`,
++    ).catch(() => {});
++  }
++
++  return JSON.stringify({
++    ok: true,
++    instrucao:
++      'Conversa transferida para um atendente humano. Avise o cliente, de forma calorosa, que uma pessoa da equipe vai responder em breve.',
++  });
++}
++
++// =====================================================================
++// Supabase — conversas e mensagens
++// =====================================================================
++async function getOrCreateConversation(supabase: SupabaseClient, phone: string, name?: string) {
++  const { data: existing } = await supabase
++    .from('whatsapp_conversations')
++    .select('*')
++    .eq('phone', phone)
++    .maybeSingle();
++
++  if (existing) {
++    if (name && !existing.customer_name) {
++      await supabase
++        .from('whatsapp_conversations')
++        .update({ customer_name: name })
++        .eq('id', existing.id);
++    }
++    return existing;
++  }
++
++  const { data: created, error } = await supabase
++    .from('whatsapp_conversations')
++    .insert({ phone, customer_name: name ?? null })
++    .select('*')
++    .single();
++
++  if (error) {
++    // corrida entre duas mensagens do mesmo número: relê.
++    const { data: again } = await supabase
++      .from('whatsapp_conversations')
++      .select('*')
++      .eq('phone', phone)
++      .maybeSingle();
++    if (again) return again;
++    throw error;
++  }
++  return created;
++}
++
++// Retorna true se inseriu (mensagem nova); false se for reentrega (id duplicado).
++async function saveMessage(
++  supabase: SupabaseClient,
++  conversationId: string,
++  role: 'user' | 'assistant',
++  content: string,
++  waId: string | null,
++): Promise<boolean> {
++  const { error } = await supabase.from('whatsapp_messages').insert({
++    conversation_id: conversationId,
++    role,
++    content,
++    wa_message_id: waId,
++  });
++  if (error) {
++    if ((error as any).code === '23505') return false; // unique violation = duplicada
++    console.error('saveMessage error:', error);
++  }
++  return true;
++}
++
++async function loadHistory(supabase: SupabaseClient, conversationId: string) {
++  const { data } = await supabase
++    .from('whatsapp_messages')
++    .select('role, content')
++    .eq('conversation_id', conversationId)
++    .order('created_at', { ascending: false })
++    .limit(HISTORY_LIMIT);
++  return ((data ?? []) as { role: 'user' | 'assistant'; content: string }[]).reverse();
++}
++
++async function touchConversation(supabase: SupabaseClient, conversationId: string) {
++  await supabase
++    .from('whatsapp_conversations')
++    .update({ last_message_at: new Date().toISOString() })
++    .eq('id', conversationId);
++}
++
++// =====================================================================
++// Meta WhatsApp Cloud API
++// =====================================================================
++function extractMessages(payload: any): IncomingMessage[] {
++  const out: IncomingMessage[] = [];
++  const entries = payload?.entry ?? [];
++  for (const entry of entries) {
++    for (const change of entry?.changes ?? []) {
++      const value = change?.value;
++      const contacts = value?.contacts ?? [];
++      const nameByWaId: Record<string, string> = {};
++      for (const c of contacts) {
++        if (c?.wa_id) nameByWaId[c.wa_id] = c?.profile?.name;
++      }
++      for (const m of value?.messages ?? []) {
++        const text =
++          m?.type === 'text'
++            ? m?.text?.body
++            : m?.type === 'button'
++              ? m?.button?.text
++              : m?.type === 'interactive'
++                ? m?.interactive?.button_reply?.title ||
++                  m?.interactive?.list_reply?.title ||
++                  ''
++                : '';
++        out.push({
++          from: m?.from,
++          waId: m?.id,
++          name: nameByWaId[m?.from],
++          type: m?.type ?? 'unknown',
++          text: text ?? '',
++        });
++      }
++    }
++  }
++  return out.filter((m) => m.from && m.waId);
++}
++
++async function callGraph(body: Record<string, unknown>) {
++  const token = Deno.env.get('WHATSAPP_TOKEN');
++  const phoneNumberId = Deno.env.get('WHATSAPP_PHONE_NUMBER_ID');
++  if (!token || !phoneNumberId) {
++    console.error('Missing WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID');
++    return;
++  }
++  const resp = await fetch(`${GRAPH_BASE}/${phoneNumberId}/messages`, {
++    method: 'POST',
++    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
++    body: JSON.stringify({ messaging_product: 'whatsapp', ...body }),
++  });
++  if (!resp.ok) {
++    console.error('Graph API error:', resp.status, await resp.text());
++  }
++}
++
++async function markRead(messageId: string) {
++  await callGraph({ status: 'read', message_id: messageId }).catch(() => {});
++}
++
++async function sendText(to: string, body: string) {
++  for (const chunk of splitMessage(body)) {
++    await callGraph({ to, type: 'text', text: { body: chunk, preview_url: true } });
++  }
++}
++
++// WhatsApp limita o corpo do texto em 4096 chars. Quebra por parágrafos se precisar.
++function splitMessage(text: string, limit = 3500): string[] {
++  if (text.length <= limit) return [text];
++  const chunks: string[] = [];
++  let current = '';
++  for (const para of text.split('\n')) {
++    if ((current + '\n' + para).length > limit) {
++      if (current) chunks.push(current);
++      current = para;
++    } else {
++      current = current ? `${current}\n${para}` : para;
++    }
++  }
++  if (current) chunks.push(current);
++  return chunks;
++}
++
++// HMAC-SHA256 do corpo cru com o App Secret == header x-hub-signature-256.
++async function verifyMetaSignature(req: Request, rawBody: string, appSecret: string): Promise<boolean> {
++  const header = req.headers.get('x-hub-signature-256');
++  if (!header || !header.startsWith('sha256=')) return false;
++  const provided = header.slice('sha256='.length);
++  const key = await crypto.subtle.importKey(
++    'raw',
++    new TextEncoder().encode(appSecret),
++    { name: 'HMAC', hash: 'SHA-256' },
++    false,
++    ['sign'],
++  );
++  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(rawBody));
++  const expected = Array.from(new Uint8Array(sig))
++    .map((b) => b.toString(16).padStart(2, '0'))
++    .join('');
++  // comparação de tamanho constante
++  if (expected.length !== provided.length) return false;
++  let diff = 0;
++  for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ provided.charCodeAt(i);
++  return diff === 0;
++}
+diff --git a/supabase/migrations/20260616000000_whatsapp_ai_attendant.sql b/supabase/migrations/20260616000000_whatsapp_ai_attendant.sql
+new file mode 100644
+index 0000000..0de6514
+--- /dev/null
++++ b/supabase/migrations/20260616000000_whatsapp_ai_attendant.sql
+@@ -0,0 +1,63 @@
++-- WhatsApp AI Attendant
++-- Memória de conversa por número (para a IA manter contexto entre mensagens) +
++-- toggle global do atendente. A edge function `whatsapp-webhook` escreve via
++-- service role (bypassa RLS); o painel admin pode ler.
++
++-- ========================
++-- Toggle global do atendente de IA (admin pode desligar quando quiser)
++-- ========================
++ALTER TABLE public.store_settings
++  ADD COLUMN IF NOT EXISTS whatsapp_ai_enabled BOOLEAN NOT NULL DEFAULT true;
++
++-- ========================
++-- CONVERSATIONS — uma linha por número de WhatsApp
++-- ========================
++CREATE TABLE public.whatsapp_conversations (
++  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
++  phone TEXT NOT NULL UNIQUE,
++  customer_name TEXT,
++  -- 'bot' = IA responde automaticamente; 'human' = um atendente assumiu (IA fica em silêncio)
++  status TEXT NOT NULL DEFAULT 'bot' CHECK (status IN ('bot', 'human')),
++  last_message_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
++  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
++);
++
++ALTER TABLE public.whatsapp_conversations ENABLE ROW LEVEL SECURITY;
++
++-- ========================
++-- MESSAGES — histórico de cada conversa
++-- ========================
++CREATE TABLE public.whatsapp_messages (
++  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
++  conversation_id UUID NOT NULL REFERENCES public.whatsapp_conversations(id) ON DELETE CASCADE,
++  -- id da mensagem na Meta (wamid...) — usado para deduplicar reentregas do webhook.
++  -- NULL para mensagens enviadas pela própria IA.
++  wa_message_id TEXT UNIQUE,
++  role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
++  content TEXT NOT NULL,
++  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
++);
++
++ALTER TABLE public.whatsapp_messages ENABLE ROW LEVEL SECURITY;
++
++CREATE INDEX idx_whatsapp_messages_conversation
++  ON public.whatsapp_messages (conversation_id, created_at);
++
++-- ========================
++-- RLS — só admin/editor lê (futuro painel de conversas).
++-- A edge function escreve via service role e ignora estas policies.
++-- ========================
++CREATE POLICY "Admins and editors can view conversations"
++  ON public.whatsapp_conversations FOR SELECT
++  TO authenticated
++  USING (public.has_admin_or_editor_role(auth.uid()));
++
++CREATE POLICY "Admins and editors can update conversations"
++  ON public.whatsapp_conversations FOR UPDATE
++  TO authenticated
++  USING (public.has_admin_or_editor_role(auth.uid()));
++
++CREATE POLICY "Admins and editors can view messages"
++  ON public.whatsapp_messages FOR SELECT
++  TO authenticated
++  USING (public.has_admin_or_editor_role(auth.uid()));
+-- 
+2.43.0
+
+
+From 45794c3e800f5789ce093aafcdaaf05865f6906e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 16 Jun 2026 01:58:47 +0000
+Subject: [PATCH 2/3] feat: base de conhecimento (FAQ) no atendente + analise
+ de e-commerce/frete
+
+- migration faqs: tabela de perguntas/respostas (frete, troca, garantia, etc.)
+  com seed inicial e RLS; FAQs ativas injetadas no system prompt cacheado
+- whatsapp-webhook: carrega FAQs e monta o system dinamico (rapido, sem chute)
+- docs/analise-daniel-bike-shop.md: analise completa (frete/transportadoras,
+  melhorias de e-commerce priorizadas, caminho do RAG semantico com pgvector,
+  estimativas de custo)
+
+https://claude.ai/code/session_01EHjNeDs9ubktPMpL91pBBk
+---
+ docs/analise-daniel-bike-shop.md              | 205 ++++++++++++++++++
+ supabase/functions/whatsapp-webhook/README.md |  10 +
+ supabase/functions/whatsapp-webhook/index.ts  |  44 +++-
+ .../20260616010000_faqs_knowledge_base.sql    |  69 ++++++
+ 4 files changed, 324 insertions(+), 4 deletions(-)
+ create mode 100644 docs/analise-daniel-bike-shop.md
+ create mode 100644 supabase/migrations/20260616010000_faqs_knowledge_base.sql
+
+diff --git a/docs/analise-daniel-bike-shop.md b/docs/analise-daniel-bike-shop.md
+new file mode 100644
+index 0000000..5b49ebd
+--- /dev/null
++++ b/docs/analise-daniel-bike-shop.md
+@@ -0,0 +1,205 @@
++# Análise — Daniel Bike Shop (e-commerce, frete e atendimento com IA)
++
++Documento de análise e recomendações. Não é código de produção — é o "mapa" do
++que melhorar e como. Datado de 2026-06-16.
++
++---
++
++## 1. O que o site já é (e já está bom)
++
++Stack moderna e bem montada:
++
++- **Front-end:** React 18 + Vite + TypeScript, Tailwind + shadcn/ui, TanStack Query.
++- **Back-end:** Supabase (Postgres + Auth + Storage + Edge Functions em Deno), com **RLS em todas as tabelas**.
++- **Pagamento:** Mercado Pago (Pix + cartão) com webhook + opção "combinar via WhatsApp".
++- **ERP:** integração Bling — sincroniza produtos e **emite NF-e automaticamente** (diferencial forte para uma loja pequena).
++- **E-commerce completo:** catálogo, carrinho, lista de desejos, cupons validados no servidor, avaliações, painel admin (produtos, pedidos, estoque, cupons, banners, usuários, configurações).
++- **SEO:** meta tags, sitemap, robots, Open Graph.
++
++Conclusão: a base é sólida. Os maiores ganhos agora estão em **frete real** e **atendimento automatizado** (este último já implementado neste PR).
++
++---
++
++## 2. O maior furo: frete é fixo e faz perder dinheiro
++
++### Como está hoje
++`src/lib/shipping.ts` tem o frete **escrito na mão**: taxa fixa de **R$ 29,90**,
++grátis acima de **R$ 299**. Não há cálculo por CEP nem por transportadora. O CEP
++que o cliente digita no checkout (`useCepLookup`) só preenche o endereço via
++ViaCEP — **não calcula frete**.
++
++E tem um problema estrutural: a tabela `products` **não tem peso nem dimensões**,
++e o sync do Bling (`bling-sync-products`) também não puxa esses campos. Sem peso e
++dimensão, é **impossível** calcular frete real.
++
++### Por que isso é grave para bicicleta
++Bicicleta é volumosa. O frete é cobrado pelo **maior** entre o peso real e o
++**peso cúbico** (volumétrico). Fórmula usada pelos Correios:
++
++```
++peso cúbico (kg) = (comprimento × largura × altura em cm) / 6000
++```
++
++Uma caixa de bike típica (~130 × 80 × 25 cm) dá **~43 kg de peso cúbico** mesmo
++pesando ~18 kg reais. Ou seja: mandar uma bike por R$ 29,90 fixo significa
++**pagar a diferença do próprio bolso em praticamente todo pedido de bicicleta**.
++
++### Limites que eliminam os Correios para bikes montadas
++Os Correios (PAC/SEDEX) aceitam até **30 kg**, com **máximo de 100 cm por lado** e
++**soma das dimensões ≤ 200 cm** (acima de 70 cm em qualquer lado já há taxa extra).
++Uma caixa de bike (130 cm de comprimento; soma ~235 cm) **estoura esses limites** →
++**bicicleta inteira não vai pelos Correios**. Correios serve bem para **peças e
++acessórios pequenos**; **bikes precisam de transportadora**.
++
++Fontes: [limites Correios (Melhor Envio)](https://melhorenvio.com.br/blog/frete-e-logistica/limite-de-peso-correios/), [dimensões Correios (Loja Integrada)](https://ajuda.lojaintegrada.com.br/pt-BR/articles/6070497-quais-sao-as-dimensoes-maximas-e-minimas-permitidas-pelos-correios), [limites Jadlog (Frenet)](https://ajuda.frenet.com.br/knowledge-base/qual-o-limite-de-peso-e-dimensoes-da-jadlog).
++
++### Transportadoras para bike encaixotada
++- **Jadlog:** aceita até 120 kg, máx 80×80×80 cm; cobra taxa extra a partir de 50 kg (real ou cúbico). Muito usada para bike via plataformas agregadoras.
++- **Loggi, Azul Cargo, Total Express:** também trabalham com volumes grandes; valem cotar.
++- **Correios:** só peças/acessórios pequenos.
++
++### Estimativas de custo de frete (APROXIMADAS — cotar para valores exatos)
++> Não consegui fechar tabelas oficiais atualizadas; trate como ordem de grandeza.
++> O peso cúbico da caixa de bike domina o preço.
++
++| Envio | Origem BH → | Faixa aproximada | Prazo típico |
++|---|---|---|---|
++| Bicicleta encaixotada (~18 kg, ~43 kg cúbico) | Sudeste (SP/RJ) | R$ 90 – R$ 180 | 3–7 dias úteis |
++| Bicicleta encaixotada | Sul / Centro-Oeste | R$ 130 – R$ 260 | 5–10 dias |
++| Bicicleta encaixotada | Nordeste / Norte | R$ 200 – R$ 450+ | 7–15 dias |
++| Peça pequena (~1 kg) | Brasil (Correios PAC) | R$ 20 – R$ 60 | 3–10 dias |
++
++### Recomendação de frete (prioridade #1)
++1. **Adicionar peso e dimensões aos produtos** e puxá-los do Bling no sync. O Bling já tem esses campos (`pesoBruto`, `pesoLiquido`, `dimensoes.largura/altura/profundidade`); o sync atual só ignora. É o pré-requisito de tudo.
++   ```sql
++   ALTER TABLE public.products
++     ADD COLUMN weight_kg NUMERIC(8,3),     -- peso bruto
++     ADD COLUMN length_cm NUMERIC(6,1),
++     ADD COLUMN width_cm  NUMERIC(6,1),
++     ADD COLUMN height_cm NUMERIC(6,1);
++   ```
++2. **Integrar um agregador de frete** para cotar por CEP no carrinho/checkout:
++   - **Melhor Envio** e **SuperFrete**: sem mensalidade, cobram só por envio, têm **API pública** para site próprio, geram etiqueta e dão desconto em Correios/Jadlog/Loggi. ([comparativo](https://www.ruacep.com.br/guias/compras/comparativo-plataformas-frete-melhor-envio-superfrete-frenet/), [Melhor Envio](https://melhorenvio.com.br/blog/frete-e-logistica/plataformas-de-frete/))
++   - **Frenet**: também boa para multi-transportadora.
++   - O fluxo certo: numa Edge Function, receber CEP + itens (peso/dim somados), chamar a API do agregador, devolver as opções (transportadora, preço, prazo) e mostrar no checkout.
++3. **Oferecer "Retirar na loja" (BH):** vocês têm loja física. Retirada = frete R$ 0, conversão maior e zero risco logístico. Ganho fácil.
++4. **Mostrar prazo de entrega** junto do preço (hoje não existe).
++5. **Rastreamento para o cliente** (o agregador devolve o código).
++6. **Frete grátis com regra real** (por faixa de valor *e* região), só depois que o cálculo real existir — senão continua subsidiando no prejuízo.
++
++---
++
++## 3. Outras melhorias de e-commerce (priorizadas)
++
++**Alto impacto**
++- **Recuperação de carrinho abandonado** via WhatsApp/e-mail (casa com o atendente de IA deste PR).
++- **Retirada na loja** (citada acima) — também serve para "reserva online, paga/retira na loja".
++- **Cupom/【Pix com desconto】** visível — Pix tem custo menor; incentivar aumenta margem.
++
++**Médio impacto**
++- **Limpeza de código morto:** `src/data/products.ts` é um catálogo estático/legado (os produtos reais vêm do Supabase/Bling). Manter os dois confunde e gera bugs. Remover ou marcar claramente.
++- **Busca de produtos melhor:** hoje é por palavra-chave; busca semântica ajuda ("bike pra trilha até 3 mil") — ver seção 5.
++- **Página de FAQ no site** reaproveitando a tabela `faqs` criada neste PR.
++- **Mais fotos/【specs】 padronizadas** (aro, quadro, marchas já existem como colunas — preencher sempre via Bling).
++
++**Higiene**
++- **Avaliações com moderação** (já existe `/admin/reviews`) — manter ativo contra spam.
++- **Monitoramento do webhook de pagamento** (alertas se falhar).
++
++---
++
++## 4. Atendente de WhatsApp com IA (implementado neste PR)
++
++Implementado em `supabase/functions/whatsapp-webhook/` + migrations
++`..._whatsapp_ai_attendant.sql` e `..._faqs_knowledge_base.sql`.
++
++- **Webhook da Meta WhatsApp Cloud API (oficial)** → Edge Function → **Claude (tool use)** → resposta.
++- **Consulta preço/estoque reais** no Supabase (ferramentas `buscar_produtos`, `detalhes_produto`, `info_loja`) — nunca chuta preço.
++- **FAQ** (frete, troca, garantia, pagamento...) injetada no system prompt **cacheado** — respostas instantâneas e sem custo de busca.
++- **Memória por número**, **handoff para humano** (some quando uma pessoa assume), **liga/desliga** no admin (`store_settings.whatsapp_ai_enabled`).
++- **Velocidade:** sem "thinking", respostas curtas, prompt caching, confirma leitura na hora.
++
++Setup completo em `supabase/functions/whatsapp-webhook/README.md`.
++
++---
++
++## 5. RAG semântico (pgvector) — quando e como
++
++**Decisão de engenharia:** para uma FAQ pequena (dezenas de itens), **colocar a
++FAQ inteira no system prompt cacheado é melhor que busca vetorial** — mais rápido,
++mais barato, sem outro serviço, sem latência de embedding. Por isso o atendente já
++faz assim. **pgvector compensa quando a base cresce** (manuais, políticas longas,
++centenas de produtos com descrições ricas, histórico).
++
++Quando chegar essa hora, o caminho (tudo dentro do próprio Supabase):
++
++1. **Habilitar pgvector e criar a coluna/【tabela】 de embeddings:**
++   ```sql
++   CREATE EXTENSION IF NOT EXISTS vector;
++   ALTER TABLE public.faqs ADD COLUMN embedding vector(1024);
++   -- (ou uma tabela product_embeddings para o catálogo)
++   ```
++2. **RPC de similaridade** (busca por cosseno):
++   ```sql
++   CREATE FUNCTION public.match_faqs(query_embedding vector(1024), match_count int)
++   RETURNS TABLE (question text, answer text, similarity float)
++   LANGUAGE sql STABLE AS $$
++     SELECT question, answer, 1 - (embedding <=> query_embedding) AS similarity
++     FROM public.faqs
++     WHERE is_active = true AND embedding IS NOT NULL
++     ORDER BY embedding <=> query_embedding
++     LIMIT match_count;
++   $$;
++   ```
++3. **Gerar embeddings.** A Anthropic não tem modelo de embedding próprio; o
++   recomendado é a **Voyage AI** (parceira da Anthropic) — ex. `voyage-3.5`,
++   1024 dims, multilíngue (bom para PT-BR). Alternativa: OpenAI
++   `text-embedding-3-small`. Uma Edge Function embeda as FAQs/produtos novos e
++   grava na coluna `embedding`.
++4. **No atendente**, adicionar uma ferramenta `buscar_conhecimento` que embeda a
++   pergunta do cliente e chama `match_faqs`/`match_products`.
++
++Custo de embedding é baixíssimo (centavos por milhares de itens) e só roda
++quando o conteúdo muda.
++
++---
++
++## 6. Estimativas de custo (mensal)
++
++**IA (Claude)** — preços por 1 milhão de tokens (entrada / saída):
++
++| Modelo | ID | Indicado para | Preço |
++|---|---|---|---|
++| Haiku 4.5 | `claude-haiku-4-5` | **WhatsApp (recomendado)** — rápido e barato | US$ 1 / US$ 5 |
++| Sonnet 4.6 | `claude-sonnet-4-6` | equilíbrio | US$ 3 / US$ 15 |
++| Opus 4.8 | `claude-opus-4-8` | casos difíceis (padrão do código) | US$ 5 / US$ 25 |
++
++Com prompt caching e respostas curtas, cada conversa custa **centavos**. Ex.: com
++Haiku, alguns milhares de conversas/mês ficam tipicamente em **poucas dezenas de
++reais** (varia com o tamanho das mensagens). Troca de modelo é só o secret
++`CLAUDE_MODEL`.
++
++**WhatsApp (Meta Cloud API):** a Meta passou a cobrar **por mensagem** (a partir
++de jul/2025), com categorias (marketing / utility / authentication / service). O
++atendimento iniciado pelo cliente (**service**) é a categoria mais barata e, na
++janela de 24h, historicamente sem custo de template. Para o uso deste bot
++(responder quem chama a loja), o custo de WhatsApp tende a ser baixo. **Confirme
++as tarifas atuais para o Brasil no painel da Meta** — não consegui validar os
++números exatos de 2026 aqui.
++
++**Frete (agregador):** Melhor Envio / SuperFrete **sem mensalidade** — você paga
++só o frete de cada envio (com desconto vs. balcão).
++
++**Embeddings (só se for de pgvector):** Voyage/OpenAI — centavos por mês na escala
++de uma loja.
++
++---
++
++## 7. Ordem sugerida de execução
++
++1. ✅ **Atendente de WhatsApp com IA** (feito neste PR) — trocar `CLAUDE_MODEL` para `claude-haiku-4-5`.
++2. **Frete real:** peso/dimensões do Bling → API Melhor Envio/SuperFrete no checkout → "retirar na loja".
++3. **Rastreamento + prazo** para o cliente.
++4. **Recuperação de carrinho** via o próprio WhatsApp.
++5. **Página/admin de FAQ** reaproveitando a tabela `faqs`.
++6. **pgvector** só quando a base de conhecimento crescer.
+diff --git a/supabase/functions/whatsapp-webhook/README.md b/supabase/functions/whatsapp-webhook/README.md
+index a374af5..0a0d2fa 100644
+--- a/supabase/functions/whatsapp-webhook/README.md
++++ b/supabase/functions/whatsapp-webhook/README.md
+@@ -99,6 +99,16 @@ típica custa centavos.
+ - Para devolver a conversa para a IA: mude o `status` da linha em
+   `whatsapp_conversations` de `human` para `bot`.
+ 
++## Base de conhecimento (FAQ)
++
++A tabela `faqs` (migration `..._faqs_knowledge_base.sql`) guarda perguntas e
++respostas (frete, troca, garantia, pagamento, loja física...). As FAQs ativas
++são injetadas no **system prompt cacheado** a cada conversa — então o atendente
++responde essas dúvidas na hora, sem chute e sem custo de busca. Edite/adicione
++FAQs direto na tabela (ou num futuro `/admin/faqs`). Para uma base grande
++(manuais, centenas de documentos), vale migrar para busca vetorial com pgvector
++— o passo a passo está em `docs/analise-daniel-bike-shop.md`.
++
+ ## Limitações desta v1 (próximos passos fáceis)
+ 
+ - Trata **texto**. Áudio/imagem recebidos ganham uma resposta padrão pedindo texto
+diff --git a/supabase/functions/whatsapp-webhook/index.ts b/supabase/functions/whatsapp-webhook/index.ts
+index 9f955bb..579ee01 100644
+--- a/supabase/functions/whatsapp-webhook/index.ts
++++ b/supabase/functions/whatsapp-webhook/index.ts
+@@ -108,6 +108,35 @@ const TOOLS = [
+   },
+ ];
+ 
++async function loadActiveFaqs(supabase: SupabaseClient): Promise<string> {
++  const { data } = await supabase
++    .from('faqs')
++    .select('question, answer')
++    .eq('is_active', true)
++    .order('display_order', { ascending: true })
++    .limit(50);
++  if (!data || data.length === 0) return '';
++  return (data as { question: string; answer: string }[])
++    .map((f) => `P: ${f.question}\nR: ${f.answer}`)
++    .join('\n\n');
++}
++
++function buildSystemBlocks(faqs: string): any[] {
++  const blocks: any[] = [
++    { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
++  ];
++  if (faqs) {
++    blocks.push({
++      type: 'text',
++      text:
++        'Perguntas frequentes da loja (use como base para dúvidas que não sejam sobre um produto específico; se não estiver aqui nem nas ferramentas, ofereça chamar um atendente):\n\n' +
++        faqs,
++      cache_control: { type: 'ephemeral' },
++    });
++  }
++  return blocks;
++}
++
+ // =====================================================================
+ // Webhook HTTP
+ // =====================================================================
+@@ -171,9 +200,14 @@ serve(async (req) => {
+     .maybeSingle();
+   const aiEnabled = settings?.whatsapp_ai_enabled ?? true;
+ 
++  // FAQs ativas vão no system prompt (cacheado) — atende dúvidas de frete/troca/
++  // garantia etc. com rapidez e sem chute.
++  const faqs = await loadActiveFaqs(supabase);
++  const systemBlocks = buildSystemBlocks(faqs);
++
+   // Processa em background e responde 200 imediatamente (a Meta tem timeout curto).
+   const work = Promise.allSettled(
+-    incoming.map((m) => handleMessage(supabase, anthropic, m, aiEnabled)),
++    incoming.map((m) => handleMessage(supabase, anthropic, m, aiEnabled, systemBlocks)),
+   );
+   // @ts-ignore — EdgeRuntime existe no runtime do Supabase, não nos tipos.
+   if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) {
+@@ -202,6 +236,7 @@ async function handleMessage(
+   anthropic: Anthropic,
+   msg: IncomingMessage,
+   aiEnabled: boolean,
++  system: any[],
+ ) {
+   try {
+     const convo = await getOrCreateConversation(supabase, msg.from, msg.name);
+@@ -227,7 +262,7 @@ async function handleMessage(
+     }
+ 
+     const history = await loadHistory(supabase, convo.id);
+-    const reply = await runAI(anthropic, supabase, convo, history);
++    const reply = await runAI(anthropic, supabase, convo, history, system);
+ 
+     await sendText(msg.from, reply);
+     await saveMessage(supabase, convo.id, 'assistant', reply, null);
+@@ -245,6 +280,7 @@ async function runAI(
+   supabase: SupabaseClient,
+   convo: { id: string; phone: string; customer_name: string | null },
+   history: { role: 'user' | 'assistant'; content: string }[],
++  system: any[],
+ ): Promise<string> {
+   const messages: any[] = history.map((m) => ({ role: m.role, content: m.content }));
+ 
+@@ -252,8 +288,8 @@ async function runAI(
+     const resp: any = await anthropic.messages.create({
+       model: CLAUDE_MODEL,
+       max_tokens: 1024,
+-      // Cacheia o system + ferramentas (prefixo estável) → respostas mais rápidas e baratas.
+-      system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
++      // system + ferramentas são o prefixo cacheado → respostas mais rápidas e baratas.
++      system,
+       tools: TOOLS as any,
+       messages,
+     });
+diff --git a/supabase/migrations/20260616010000_faqs_knowledge_base.sql b/supabase/migrations/20260616010000_faqs_knowledge_base.sql
+new file mode 100644
+index 0000000..178e2e0
+--- /dev/null
++++ b/supabase/migrations/20260616010000_faqs_knowledge_base.sql
+@@ -0,0 +1,69 @@
++-- FAQ / base de conhecimento do atendente de IA
++-- Perguntas e respostas que a IA usa para responder dúvidas que não são de
++-- catálogo (frete, troca, garantia, pagamento, loja física, etc.).
++-- A edge function whatsapp-webhook injeta as FAQs ativas no system prompt
++-- (que é cacheado) — assim a IA responde rápido e sem chute, sem custo de
++-- busca semântica. Para uma base grande (manuais, centenas de docs), dá para
++-- migrar para busca vetorial com pgvector — ver docs/analise-daniel-bike-shop.md.
++
++CREATE TABLE public.faqs (
++  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
++  question TEXT NOT NULL,
++  answer TEXT NOT NULL,
++  is_active BOOLEAN NOT NULL DEFAULT true,
++  display_order INTEGER NOT NULL DEFAULT 0,
++  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
++  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
++);
++
++ALTER TABLE public.faqs ENABLE ROW LEVEL SECURITY;
++
++-- Qualquer um pode ler FAQs ativas (útil para uma página de FAQ no site também).
++CREATE POLICY "Anyone can view active faqs"
++  ON public.faqs FOR SELECT
++  USING (is_active = true OR public.has_admin_or_editor_role(auth.uid()));
++
++CREATE POLICY "Admins and editors can insert faqs"
++  ON public.faqs FOR INSERT
++  TO authenticated
++  WITH CHECK (public.has_admin_or_editor_role(auth.uid()));
++
++CREATE POLICY "Admins and editors can update faqs"
++  ON public.faqs FOR UPDATE
++  TO authenticated
++  USING (public.has_admin_or_editor_role(auth.uid()));
++
++CREATE POLICY "Admins and editors can delete faqs"
++  ON public.faqs FOR DELETE
++  TO authenticated
++  USING (public.has_admin_or_editor_role(auth.uid()));
++
++CREATE TRIGGER update_faqs_updated_at
++  BEFORE UPDATE ON public.faqs
++  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
++
++-- ========================
++-- Seed inicial (edite/expanda no admin ou via SQL conforme a loja)
++-- ========================
++INSERT INTO public.faqs (question, answer, display_order) VALUES
++  ('Vocês têm loja física?',
++   'Temos sim! Ficamos em Belo Horizonte/MG. Confira o endereço e horário no nosso site; você pode comprar online e também combinar retirada na loja.',
++   1),
++  ('Como funciona o frete e o prazo de entrega?',
++   'O frete é calculado no checkout do site pelo seu CEP. Hoje a política é frete grátis acima de R$ 299; abaixo disso há uma taxa. Bicicletas vão por transportadora; peças e acessórios menores podem ir pelos Correios. O prazo aparece junto do valor do frete ao finalizar.',
++   2),
++  ('Quais as formas de pagamento?',
++   'Pix e cartão de crédito/débito direto no site (via Mercado Pago). Também dá para combinar o pagamento por aqui no WhatsApp se preferir.',
++   3),
++  ('As bicicletas vão montadas?',
++   'As bikes enviadas por transportadora vão parcialmente montadas e encaixotadas, exigindo ajustes finais simples. Se retirar na loja, entregamos revisada e pronta para pedalar.',
++   4),
++  ('Vocês emitem nota fiscal?',
++   'Sim, todo pedido sai com NF-e emitida automaticamente.',
++   5),
++  ('Como funciona a troca ou devolução?',
++   'Você tem direito de arrependimento em até 7 dias após o recebimento (compra online), conforme o Código de Defesa do Consumidor, com o produto sem uso e na embalagem. Para trocas por defeito, vale a garantia. Me chama que eu te oriento o passo a passo.',
++   6),
++  ('Os produtos têm garantia?',
++   'Têm sim. Vale a garantia do fabricante (o prazo varia por produto/marca) além da garantia legal. Para acionar, é só falar com a gente com o número do pedido.',
++   7);
+-- 
+2.43.0
+
+
+From 34ab50264970082d238ea62c870de572af22c016 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 16 Jun 2026 02:15:58 +0000
+Subject: [PATCH 3/3] feat: aba de Servicos (oficina) + painel do Atendente IA
+ no admin
+
+- migration service_orders: ordens de servico com status (nao iniciado/em
+  andamento/concluido/entregue/cancelado), RLS para equipe
+- edge function service-notify: avisa o cliente no WhatsApp a cada mudanca de
+  status (texto livre ou template da Meta), com checagem de admin/editor
+- admin: aba Servicos (registrar, mudar status e notificar) e aba Atendente IA
+  (liga/desliga o bot + gerenciar FAQ = treino do agente)
+- hooks useServiceOrders e useFaqs; rotas e menu lateral
+- whatsapp-webhook: system prompt treinado como atendente de verdade
+  (recomenda por uso/orcamento, fala de servicos, escala para humano)
+- docs: README da funcao + SETUP atualizados
+
+https://claude.ai/code/session_01EHjNeDs9ubktPMpL91pBBk
+---
+ SETUP.md                                      |   8 +-
+ src/App.tsx                                   |   4 +
+ src/components/admin/AdminSidebar.tsx         |  12 +
+ src/hooks/useFaqs.ts                          | 117 +++++++
+ src/hooks/useServiceOrders.ts                 | 152 +++++++++
+ src/pages/admin/AdminFaqsPage.tsx             | 202 ++++++++++++
+ src/pages/admin/AdminServicesPage.tsx         | 308 ++++++++++++++++++
+ supabase/config.toml                          |   5 +
+ supabase/functions/service-notify/index.ts    | 160 +++++++++
+ supabase/functions/whatsapp-webhook/README.md |  26 ++
+ supabase/functions/whatsapp-webhook/index.ts  |  42 ++-
+ .../20260616020000_service_orders.sql         |  55 ++++
+ 12 files changed, 1078 insertions(+), 13 deletions(-)
+ create mode 100644 src/hooks/useFaqs.ts
+ create mode 100644 src/hooks/useServiceOrders.ts
+ create mode 100644 src/pages/admin/AdminFaqsPage.tsx
+ create mode 100644 src/pages/admin/AdminServicesPage.tsx
+ create mode 100644 supabase/functions/service-notify/index.ts
+ create mode 100644 supabase/migrations/20260616020000_service_orders.sql
+
+diff --git a/SETUP.md b/SETUP.md
+index 657e370..802b6e9 100644
+--- a/SETUP.md
++++ b/SETUP.md
+@@ -117,12 +117,16 @@ supabase functions deploy create-first-admin
+ supabase functions deploy admin-create-user
+ supabase functions deploy admin-delete-user
+ supabase functions deploy whatsapp-webhook
++supabase functions deploy service-notify
+ ```
+ 
+ > **Atendente de WhatsApp com IA (Claude):** a função `whatsapp-webhook` faz o
+-> WhatsApp responder sozinho, consultando preço/estoque reais. O passo a passo
+-> completo (Meta Cloud API, segredos, escolha de modelo) está em
++> WhatsApp responder sozinho, consultando preço/estoque reais. A `service-notify`
++> avisa o cliente no WhatsApp quando o status de um serviço muda (aba **Serviços**
++> no admin). O passo a passo completo (Meta Cloud API, segredos, escolha de modelo,
++> template de notificação) está em
+ > [`supabase/functions/whatsapp-webhook/README.md`](./supabase/functions/whatsapp-webhook/README.md).
++> Gerencie tudo no admin: **Atendente IA** (liga/desliga + FAQ) e **Serviços**.
+ 
+ ### 5.2) Secrets
+ 
+diff --git a/src/App.tsx b/src/App.tsx
+index c311b55..08f991d 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -39,6 +39,8 @@ const AdminReviewsPage = lazy(() => import("./pages/admin/AdminReviewsPage"));
+ const AdminUsersPage = lazy(() => import("./pages/admin/AdminUsersPage"));
+ const AdminBlingPage = lazy(() => import("./pages/admin/AdminBlingPage"));
+ const AdminSettingsPage = lazy(() => import("./pages/admin/AdminSettingsPage"));
++const AdminServicesPage = lazy(() => import("./pages/admin/AdminServicesPage"));
++const AdminFaqsPage = lazy(() => import("./pages/admin/AdminFaqsPage"));
+ 
+ const queryClient = new QueryClient({
+   defaultOptions: {
+@@ -93,6 +95,8 @@ const App = () => (
+                       <Route path="categories" element={<AdminCategoriesPage />} />
+                       <Route path="stock" element={<AdminStockPage />} />
+                       <Route path="orders" element={<AdminOrdersPage />} />
++                      <Route path="services" element={<AdminServicesPage />} />
++                      <Route path="atendente-ia" element={<AdminFaqsPage />} />
+                       <Route path="banners" element={<AdminBannersPage />} />
+                       <Route path="coupons" element={<AdminCouponsPage />} />
+                       <Route path="reviews" element={<AdminReviewsPage />} />
+diff --git a/src/components/admin/AdminSidebar.tsx b/src/components/admin/AdminSidebar.tsx
+index eaf1db8..813bfbe 100644
+--- a/src/components/admin/AdminSidebar.tsx
++++ b/src/components/admin/AdminSidebar.tsx
+@@ -30,6 +30,8 @@ import {
+   Link as LinkIcon,
+   Tag,
+   Star,
++  Wrench,
++  Bot,
+ } from 'lucide-react';
+ import logo from '@/assets/logo.png';
+ import { cn } from '@/lib/utils';
+@@ -75,6 +77,16 @@ const menuItems = [
+     url: '/admin/reviews',
+     icon: Star,
+   },
++  {
++    title: 'Serviços',
++    url: '/admin/services',
++    icon: Wrench,
++  },
++  {
++    title: 'Atendente IA',
++    url: '/admin/atendente-ia',
++    icon: Bot,
++  },
+ ];
+ 
+ const adminOnlyItems = [
+diff --git a/src/hooks/useFaqs.ts b/src/hooks/useFaqs.ts
+new file mode 100644
+index 0000000..30ac7f3
+--- /dev/null
++++ b/src/hooks/useFaqs.ts
+@@ -0,0 +1,117 @@
++import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
++import type { SupabaseClient } from '@supabase/supabase-js';
++import { supabase } from '@/integrations/supabase/client';
++import { toast } from 'sonner';
++
++export interface Faq {
++  id: string;
++  question: string;
++  answer: string;
++  is_active: boolean;
++  display_order: number;
++  created_at: string;
++  updated_at: string;
++}
++
++export interface FaqInput {
++  question: string;
++  answer: string;
++  is_active?: boolean;
++  display_order?: number;
++}
++
++// tabelas novas (faqs) sem schema tipado até regenerar os types.
++const db = supabase as unknown as SupabaseClient;
++
++export const useFaqs = () => {
++  return useQuery({
++    queryKey: ['faqs-admin'],
++    queryFn: async (): Promise<Faq[]> => {
++      const { data, error } = await db
++        .from('faqs')
++        .select('*')
++        .order('display_order', { ascending: true });
++      if (error) throw error;
++      return (data ?? []) as Faq[];
++    },
++  });
++};
++
++export const useCreateFaq = () => {
++  const queryClient = useQueryClient();
++  return useMutation({
++    mutationFn: async (input: FaqInput) => {
++      const { error } = await db.from('faqs').insert(input);
++      if (error) throw error;
++    },
++    onSuccess: () => {
++      queryClient.invalidateQueries({ queryKey: ['faqs-admin'] });
++      toast.success('FAQ adicionada! O atendente já vai usar.');
++    },
++    onError: () => toast.error('Erro ao salvar a FAQ.'),
++  });
++};
++
++export const useUpdateFaq = () => {
++  const queryClient = useQueryClient();
++  return useMutation({
++    mutationFn: async ({ id, updates }: { id: string; updates: Partial<FaqInput> }) => {
++      const { error } = await db.from('faqs').update(updates).eq('id', id);
++      if (error) throw error;
++    },
++    onSuccess: () => {
++      queryClient.invalidateQueries({ queryKey: ['faqs-admin'] });
++      toast.success('FAQ atualizada!');
++    },
++    onError: () => toast.error('Erro ao atualizar a FAQ.'),
++  });
++};
++
++export const useDeleteFaq = () => {
++  const queryClient = useQueryClient();
++  return useMutation({
++    mutationFn: async (id: string) => {
++      const { error } = await db.from('faqs').delete().eq('id', id);
++      if (error) throw error;
++    },
++    onSuccess: () => {
++      queryClient.invalidateQueries({ queryKey: ['faqs-admin'] });
++      toast.success('FAQ removida.');
++    },
++    onError: () => toast.error('Erro ao remover a FAQ.'),
++  });
++};
++
++// Liga/desliga o atendente de IA (store_settings.whatsapp_ai_enabled).
++export const useWhatsappAi = () => {
++  return useQuery({
++    queryKey: ['whatsapp-ai-toggle'],
++    queryFn: async () => {
++      const { data, error } = await db
++        .from('store_settings')
++        .select('id, whatsapp_ai_enabled')
++        .limit(1)
++        .maybeSingle();
++      if (error) throw error;
++      return data as { id: string; whatsapp_ai_enabled: boolean } | null;
++    },
++  });
++};
++
++export const useToggleWhatsappAi = () => {
++  const queryClient = useQueryClient();
++  return useMutation({
++    mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }) => {
++      const { error } = await db
++        .from('store_settings')
++        .update({ whatsapp_ai_enabled: enabled })
++        .eq('id', id);
++      if (error) throw error;
++    },
++    onSuccess: (_d, vars) => {
++      queryClient.invalidateQueries({ queryKey: ['whatsapp-ai-toggle'] });
++      toast.success(vars.enabled ? 'Atendente de IA ligado.' : 'Atendente de IA desligado.');
++    },
++    onError: () => toast.error('Erro ao alterar o atendente.'),
++  });
++};
+diff --git a/src/hooks/useServiceOrders.ts b/src/hooks/useServiceOrders.ts
+new file mode 100644
+index 0000000..5172ceb
+--- /dev/null
++++ b/src/hooks/useServiceOrders.ts
+@@ -0,0 +1,152 @@
++import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
++import type { SupabaseClient } from '@supabase/supabase-js';
++import { supabase } from '@/integrations/supabase/client';
++import { toast } from 'sonner';
++
++export type ServiceStatus =
++  | 'nao_iniciado'
++  | 'em_andamento'
++  | 'concluido'
++  | 'entregue'
++  | 'cancelado';
++
++export interface ServiceOrder {
++  id: string;
++  customer_name: string;
++  customer_phone: string;
++  equipment: string | null;
++  description: string | null;
++  status: ServiceStatus;
++  price: number | null;
++  notes: string | null;
++  notify_whatsapp: boolean;
++  created_at: string;
++  updated_at: string;
++}
++
++export interface ServiceOrderInput {
++  customer_name: string;
++  customer_phone: string;
++  equipment?: string | null;
++  description?: string | null;
++  price?: number | null;
++  notes?: string | null;
++  notify_whatsapp?: boolean;
++}
++
++export const SERVICE_STATUS_LABELS: Record<ServiceStatus, string> = {
++  nao_iniciado: 'Não iniciado',
++  em_andamento: 'Em andamento',
++  concluido: 'Concluído',
++  entregue: 'Entregue',
++  cancelado: 'Cancelado',
++};
++
++// supabase é tipado com as tabelas geradas; tabelas novas (service_orders) usam
++// um cliente sem o schema tipado para evitar erro de tipo até regenerar os types.
++const db = supabase as unknown as SupabaseClient;
++
++export const useServiceOrders = () => {
++  return useQuery({
++    queryKey: ['service-orders'],
++    queryFn: async (): Promise<ServiceOrder[]> => {
++      const { data, error } = await db
++        .from('service_orders')
++        .select('*')
++        .order('created_at', { ascending: false });
++      if (error) throw error;
++      return (data ?? []) as ServiceOrder[];
++    },
++  });
++};
++
++export const useCreateServiceOrder = () => {
++  const queryClient = useQueryClient();
++  return useMutation({
++    mutationFn: async (input: ServiceOrderInput): Promise<ServiceOrder> => {
++      const { data: { user } } = await supabase.auth.getUser();
++      const { data, error } = await db
++        .from('service_orders')
++        .insert({ ...input, created_by: user?.id ?? null })
++        .select()
++        .single();
++      if (error) throw error;
++      return data as ServiceOrder;
++    },
++    onSuccess: () => {
++      queryClient.invalidateQueries({ queryKey: ['service-orders'] });
++      toast.success('Serviço registrado!');
++    },
++    onError: () => toast.error('Erro ao registrar serviço.'),
++  });
++};
++
++export const useUpdateServiceOrder = () => {
++  const queryClient = useQueryClient();
++  return useMutation({
++    mutationFn: async ({ id, updates }: { id: string; updates: Partial<ServiceOrderInput> }) => {
++      const { error } = await db.from('service_orders').update(updates).eq('id', id);
++      if (error) throw error;
++    },
++    onSuccess: () => {
++      queryClient.invalidateQueries({ queryKey: ['service-orders'] });
++      toast.success('Serviço atualizado!');
++    },
++    onError: () => toast.error('Erro ao atualizar serviço.'),
++  });
++};
++
++// Muda o status e, se notify=true, avisa o cliente no WhatsApp (edge function).
++export const useSetServiceStatus = () => {
++  const queryClient = useQueryClient();
++  return useMutation({
++    mutationFn: async ({
++      id,
++      status,
++      notify,
++    }: {
++      id: string;
++      status: ServiceStatus;
++      notify: boolean;
++    }) => {
++      const { error } = await db.from('service_orders').update({ status }).eq('id', id);
++      if (error) throw error;
++
++      let notified = false;
++      let notifyError: string | undefined;
++      if (notify) {
++        const { data, error: fnError } = await supabase.functions.invoke('service-notify', {
++          body: { serviceOrderId: id },
++        });
++        if (fnError || (data && data.success === false)) {
++          notifyError = (data && data.message) || fnError?.message || 'Falha ao avisar no WhatsApp';
++        } else {
++          notified = true;
++        }
++      }
++      return { notified, notifyError };
++    },
++    onSuccess: ({ notified, notifyError }) => {
++      queryClient.invalidateQueries({ queryKey: ['service-orders'] });
++      if (notified) toast.success('Status atualizado e cliente avisado no WhatsApp!');
++      else if (notifyError) toast.warning(`Status atualizado, mas: ${notifyError}`);
++      else toast.success('Status atualizado!');
++    },
++    onError: () => toast.error('Erro ao atualizar status.'),
++  });
++};
++
++export const useDeleteServiceOrder = () => {
++  const queryClient = useQueryClient();
++  return useMutation({
++    mutationFn: async (id: string) => {
++      const { error } = await db.from('service_orders').delete().eq('id', id);
++      if (error) throw error;
++    },
++    onSuccess: () => {
++      queryClient.invalidateQueries({ queryKey: ['service-orders'] });
++      toast.success('Serviço removido.');
++    },
++    onError: () => toast.error('Erro ao remover serviço.'),
++  });
++};
+diff --git a/src/pages/admin/AdminFaqsPage.tsx b/src/pages/admin/AdminFaqsPage.tsx
+new file mode 100644
+index 0000000..61e7186
+--- /dev/null
++++ b/src/pages/admin/AdminFaqsPage.tsx
+@@ -0,0 +1,202 @@
++import { useState } from 'react';
++import {
++  useFaqs,
++  useCreateFaq,
++  useUpdateFaq,
++  useDeleteFaq,
++  useWhatsappAi,
++  useToggleWhatsappAi,
++  type Faq,
++  type FaqInput,
++} from '@/hooks/useFaqs';
++import { Button } from '@/components/ui/button';
++import { Input } from '@/components/ui/input';
++import { Label } from '@/components/ui/label';
++import { Textarea } from '@/components/ui/textarea';
++import { Switch } from '@/components/ui/switch';
++import { Badge } from '@/components/ui/badge';
++import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
++import {
++  Dialog,
++  DialogContent,
++  DialogFooter,
++  DialogHeader,
++  DialogTitle,
++} from '@/components/ui/dialog';
++import { Loader2, Plus, Pencil, Trash2, Bot } from 'lucide-react';
++
++const emptyForm: FaqInput = { question: '', answer: '', is_active: true, display_order: 0 };
++
++const AdminFaqsPage = () => {
++  const { data: faqs, isLoading } = useFaqs();
++  const createFaq = useCreateFaq();
++  const updateFaq = useUpdateFaq();
++  const deleteFaq = useDeleteFaq();
++  const { data: ai } = useWhatsappAi();
++  const toggleAi = useToggleWhatsappAi();
++
++  const [open, setOpen] = useState(false);
++  const [editing, setEditing] = useState<Faq | null>(null);
++  const [form, setForm] = useState<FaqInput>(emptyForm);
++
++  const openNew = () => {
++    setEditing(null);
++    setForm({ ...emptyForm, display_order: (faqs?.length ?? 0) + 1 });
++    setOpen(true);
++  };
++
++  const openEdit = (f: Faq) => {
++    setEditing(f);
++    setForm({
++      question: f.question,
++      answer: f.answer,
++      is_active: f.is_active,
++      display_order: f.display_order,
++    });
++    setOpen(true);
++  };
++
++  const handleSubmit = async () => {
++    if (!form.question.trim() || !form.answer.trim()) return;
++    if (editing) await updateFaq.mutateAsync({ id: editing.id, updates: form });
++    else await createFaq.mutateAsync(form);
++    setOpen(false);
++  };
++
++  const handleDelete = (f: Faq) => {
++    if (window.confirm('Remover esta FAQ?')) deleteFaq.mutate(f.id);
++  };
++
++  const saving = createFaq.isPending || updateFaq.isPending;
++
++  return (
++    <div className="space-y-6">
++      <div>
++        <h1 className="text-2xl font-bold flex items-center gap-2">
++          <Bot className="h-6 w-6" /> Atendente IA
++        </h1>
++        <p className="text-sm text-muted-foreground">
++          Controle o atendente do WhatsApp e ensine respostas (FAQ). O que você escrever aqui é
++          usado pelo atendente na hora de responder.
++        </p>
++      </div>
++
++      <Card>
++        <CardHeader>
++          <CardTitle>Atendente automático no WhatsApp</CardTitle>
++        </CardHeader>
++        <CardContent>
++          <div className="flex items-center gap-3">
++            <Switch
++              checked={ai?.whatsapp_ai_enabled ?? true}
++              disabled={!ai || toggleAi.isPending}
++              onCheckedChange={(v) => ai && toggleAi.mutate({ id: ai.id, enabled: v })}
++              id="ai-toggle"
++            />
++            <Label htmlFor="ai-toggle" className="cursor-pointer">
++              {ai?.whatsapp_ai_enabled ?? true
++                ? 'Ligado — a IA responde os clientes automaticamente'
++                : 'Desligado — ninguém recebe resposta automática'}
++            </Label>
++          </div>
++          <p className="text-xs text-muted-foreground mt-3">
++            Dica: mesmo ligado, quando você assume uma conversa pelo WhatsApp a IA fica quieta
++            naquele contato até a equipe liberar de novo.
++          </p>
++        </CardContent>
++      </Card>
++
++      <Card>
++        <CardHeader>
++          <div className="flex items-center justify-between">
++            <CardTitle>Perguntas e respostas (treino)</CardTitle>
++            <Button size="sm" onClick={openNew}>
++              <Plus className="mr-2 h-4 w-4" /> Nova FAQ
++            </Button>
++          </div>
++        </CardHeader>
++        <CardContent>
++          {isLoading ? (
++            <div className="flex justify-center py-10">
++              <Loader2 className="h-6 w-6 animate-spin" />
++            </div>
++          ) : !faqs || faqs.length === 0 ? (
++            <p className="text-sm text-muted-foreground py-8 text-center">
++              Nenhuma FAQ ainda. Adicione perguntas comuns (frete, troca, garantia...).
++            </p>
++          ) : (
++            <div className="space-y-3">
++              {faqs.map((f) => (
++                <div key={f.id} className="border rounded-lg p-3 flex items-start justify-between gap-3">
++                  <div className="min-w-0">
++                    <div className="flex items-center gap-2">
++                      <p className="font-medium">{f.question}</p>
++                      {!f.is_active && <Badge variant="secondary">inativa</Badge>}
++                    </div>
++                    <p className="text-sm text-muted-foreground mt-1 whitespace-pre-wrap">{f.answer}</p>
++                  </div>
++                  <div className="flex flex-shrink-0 gap-1">
++                    <Button variant="ghost" size="icon" onClick={() => openEdit(f)}>
++                      <Pencil className="h-4 w-4" />
++                    </Button>
++                    <Button variant="ghost" size="icon" onClick={() => handleDelete(f)}>
++                      <Trash2 className="h-4 w-4 text-destructive" />
++                    </Button>
++                  </div>
++                </div>
++              ))}
++            </div>
++          )}
++        </CardContent>
++      </Card>
++
++      <Dialog open={open} onOpenChange={setOpen}>
++        <DialogContent className="max-w-lg">
++          <DialogHeader>
++            <DialogTitle>{editing ? 'Editar FAQ' : 'Nova FAQ'}</DialogTitle>
++          </DialogHeader>
++          <div className="space-y-4">
++            <div className="space-y-2">
++              <Label>Pergunta *</Label>
++              <Input
++                value={form.question}
++                placeholder="Ex: Vocês fazem entrega para todo o Brasil?"
++                onChange={(e) => setForm({ ...form, question: e.target.value })}
++              />
++            </div>
++            <div className="space-y-2">
++              <Label>Resposta *</Label>
++              <Textarea
++                rows={4}
++                value={form.answer}
++                placeholder="Resposta que o atendente deve usar."
++                onChange={(e) => setForm({ ...form, answer: e.target.value })}
++              />
++            </div>
++            <div className="flex items-center gap-3">
++              <Switch
++                checked={form.is_active ?? true}
++                onCheckedChange={(v) => setForm({ ...form, is_active: v })}
++                id="faq-active"
++              />
++              <Label htmlFor="faq-active" className="cursor-pointer">
++                Ativa (o atendente usa)
++              </Label>
++            </div>
++          </div>
++          <DialogFooter>
++            <Button variant="outline" onClick={() => setOpen(false)}>
++              Cancelar
++            </Button>
++            <Button onClick={handleSubmit} disabled={saving}>
++              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
++              {editing ? 'Salvar' : 'Adicionar'}
++            </Button>
++          </DialogFooter>
++        </DialogContent>
++      </Dialog>
++    </div>
++  );
++};
++
++export default AdminFaqsPage;
+diff --git a/src/pages/admin/AdminServicesPage.tsx b/src/pages/admin/AdminServicesPage.tsx
+new file mode 100644
+index 0000000..f8f9bb0
+--- /dev/null
++++ b/src/pages/admin/AdminServicesPage.tsx
+@@ -0,0 +1,308 @@
++import { useState } from 'react';
++import {
++  useServiceOrders,
++  useCreateServiceOrder,
++  useUpdateServiceOrder,
++  useSetServiceStatus,
++  useDeleteServiceOrder,
++  SERVICE_STATUS_LABELS,
++  type ServiceOrder,
++  type ServiceStatus,
++  type ServiceOrderInput,
++} from '@/hooks/useServiceOrders';
++import { Button } from '@/components/ui/button';
++import { Input } from '@/components/ui/input';
++import { Label } from '@/components/ui/label';
++import { Textarea } from '@/components/ui/textarea';
++import { Switch } from '@/components/ui/switch';
++import { Badge } from '@/components/ui/badge';
++import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
++import {
++  Table,
++  TableBody,
++  TableCell,
++  TableHead,
++  TableHeader,
++  TableRow,
++} from '@/components/ui/table';
++import {
++  Dialog,
++  DialogContent,
++  DialogFooter,
++  DialogHeader,
++  DialogTitle,
++} from '@/components/ui/dialog';
++import {
++  Select,
++  SelectContent,
++  SelectItem,
++  SelectTrigger,
++  SelectValue,
++} from '@/components/ui/select';
++import { Loader2, Plus, Pencil, Trash2, Wrench, MessageCircle } from 'lucide-react';
++import { formatPhone } from '@/lib/formatters';
++
++const STATUS_ORDER: ServiceStatus[] = [
++  'nao_iniciado',
++  'em_andamento',
++  'concluido',
++  'entregue',
++  'cancelado',
++];
++
++const statusBadgeClass: Record<ServiceStatus, string> = {
++  nao_iniciado: 'bg-muted text-foreground',
++  em_andamento: 'bg-blue-100 text-blue-800',
++  concluido: 'bg-green-100 text-green-800',
++  entregue: 'bg-emerald-100 text-emerald-800',
++  cancelado: 'bg-red-100 text-red-800',
++};
++
++const emptyForm: ServiceOrderInput = {
++  customer_name: '',
++  customer_phone: '',
++  equipment: '',
++  description: '',
++  price: null,
++  notes: '',
++  notify_whatsapp: true,
++};
++
++const AdminServicesPage = () => {
++  const { data: services, isLoading } = useServiceOrders();
++  const createService = useCreateServiceOrder();
++  const updateService = useUpdateServiceOrder();
++  const setStatus = useSetServiceStatus();
++  const deleteService = useDeleteServiceOrder();
++
++  const [open, setOpen] = useState(false);
++  const [editing, setEditing] = useState<ServiceOrder | null>(null);
++  const [form, setForm] = useState<ServiceOrderInput>(emptyForm);
++
++  const openNew = () => {
++    setEditing(null);
++    setForm(emptyForm);
++    setOpen(true);
++  };
++
++  const openEdit = (s: ServiceOrder) => {
++    setEditing(s);
++    setForm({
++      customer_name: s.customer_name,
++      customer_phone: s.customer_phone,
++      equipment: s.equipment ?? '',
++      description: s.description ?? '',
++      price: s.price,
++      notes: s.notes ?? '',
++      notify_whatsapp: s.notify_whatsapp,
++    });
++    setOpen(true);
++  };
++
++  const handleSubmit = async () => {
++    if (!form.customer_name.trim() || !form.customer_phone.trim()) return;
++    if (editing) {
++      await updateService.mutateAsync({ id: editing.id, updates: form });
++    } else {
++      await createService.mutateAsync(form);
++    }
++    setOpen(false);
++  };
++
++  const handleStatusChange = (s: ServiceOrder, status: ServiceStatus) => {
++    if (status === s.status) return;
++    setStatus.mutate({ id: s.id, status, notify: s.notify_whatsapp });
++  };
++
++  const handleDelete = (s: ServiceOrder) => {
++    if (window.confirm(`Remover o serviço de ${s.customer_name}?`)) {
++      deleteService.mutate(s.id);
++    }
++  };
++
++  const saving = createService.isPending || updateService.isPending;
++
++  return (
++    <div className="space-y-6">
++      <div className="flex items-center justify-between">
++        <div>
++          <h1 className="text-2xl font-bold flex items-center gap-2">
++            <Wrench className="h-6 w-6" /> Serviços (Oficina)
++          </h1>
++          <p className="text-sm text-muted-foreground">
++            Registre serviços e mude o status — o cliente é avisado no WhatsApp automaticamente.
++          </p>
++        </div>
++        <Button onClick={openNew}>
++          <Plus className="mr-2 h-4 w-4" /> Novo serviço
++        </Button>
++      </div>
++
++      <Card>
++        <CardHeader>
++          <CardTitle>Ordens de serviço</CardTitle>
++        </CardHeader>
++        <CardContent>
++          {isLoading ? (
++            <div className="flex justify-center py-10">
++              <Loader2 className="h-6 w-6 animate-spin" />
++            </div>
++          ) : !services || services.length === 0 ? (
++            <p className="text-sm text-muted-foreground py-8 text-center">
++              Nenhum serviço registrado ainda.
++            </p>
++          ) : (
++            <div className="overflow-x-auto">
++              <Table>
++                <TableHeader>
++                  <TableRow>
++                    <TableHead>Cliente</TableHead>
++                    <TableHead>Telefone</TableHead>
++                    <TableHead>Equipamento</TableHead>
++                    <TableHead>Status</TableHead>
++                    <TableHead>Avisar</TableHead>
++                    <TableHead className="text-right">Ações</TableHead>
++                  </TableRow>
++                </TableHeader>
++                <TableBody>
++                  {services.map((s) => (
++                    <TableRow key={s.id}>
++                      <TableCell className="font-medium">{s.customer_name}</TableCell>
++                      <TableCell>{s.customer_phone}</TableCell>
++                      <TableCell className="max-w-[180px] truncate">{s.equipment || '—'}</TableCell>
++                      <TableCell>
++                        <div className="flex items-center gap-2">
++                          <Badge className={statusBadgeClass[s.status]} variant="secondary">
++                            {SERVICE_STATUS_LABELS[s.status]}
++                          </Badge>
++                          <Select
++                            value={s.status}
++                            onValueChange={(v) => handleStatusChange(s, v as ServiceStatus)}
++                          >
++                            <SelectTrigger className="h-8 w-[150px]">
++                              <SelectValue />
++                            </SelectTrigger>
++                            <SelectContent>
++                              {STATUS_ORDER.map((st) => (
++                                <SelectItem key={st} value={st}>
++                                  {SERVICE_STATUS_LABELS[st]}
++                                </SelectItem>
++                              ))}
++                            </SelectContent>
++                          </Select>
++                        </div>
++                      </TableCell>
++                      <TableCell>
++                        {s.notify_whatsapp ? (
++                          <span className="inline-flex items-center gap-1 text-green-600 text-xs">
++                            <MessageCircle className="h-3 w-3" /> Sim
++                          </span>
++                        ) : (
++                          <span className="text-xs text-muted-foreground">Não</span>
++                        )}
++                      </TableCell>
++                      <TableCell className="text-right">
++                        <Button variant="ghost" size="icon" onClick={() => openEdit(s)}>
++                          <Pencil className="h-4 w-4" />
++                        </Button>
++                        <Button variant="ghost" size="icon" onClick={() => handleDelete(s)}>
++                          <Trash2 className="h-4 w-4 text-destructive" />
++                        </Button>
++                      </TableCell>
++                    </TableRow>
++                  ))}
++                </TableBody>
++              </Table>
++            </div>
++          )}
++        </CardContent>
++      </Card>
++
++      <Dialog open={open} onOpenChange={setOpen}>
++        <DialogContent className="max-w-lg">
++          <DialogHeader>
++            <DialogTitle>{editing ? 'Editar serviço' : 'Novo serviço'}</DialogTitle>
++          </DialogHeader>
++          <div className="space-y-4">
++            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
++              <div className="space-y-2">
++                <Label>Nome do cliente *</Label>
++                <Input
++                  value={form.customer_name}
++                  onChange={(e) => setForm({ ...form, customer_name: e.target.value })}
++                />
++              </div>
++              <div className="space-y-2">
++                <Label>Telefone/WhatsApp *</Label>
++                <Input
++                  value={form.customer_phone}
++                  placeholder="(31) 99999-9999"
++                  onChange={(e) => setForm({ ...form, customer_phone: formatPhone(e.target.value) })}
++                />
++              </div>
++            </div>
++            <div className="space-y-2">
++              <Label>Equipamento</Label>
++              <Input
++                value={form.equipment ?? ''}
++                placeholder="Ex: Caloi Elite 29, aro 29"
++                onChange={(e) => setForm({ ...form, equipment: e.target.value })}
++              />
++            </div>
++            <div className="space-y-2">
++              <Label>Serviço / descrição</Label>
++              <Textarea
++                rows={3}
++                value={form.description ?? ''}
++                placeholder="Ex: revisão geral, troca de pastilhas de freio"
++                onChange={(e) => setForm({ ...form, description: e.target.value })}
++              />
++            </div>
++            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
++              <div className="space-y-2">
++                <Label>Valor (R$)</Label>
++                <Input
++                  type="number"
++                  step="0.01"
++                  value={form.price ?? ''}
++                  onChange={(e) =>
++                    setForm({ ...form, price: e.target.value ? Number(e.target.value) : null })
++                  }
++                />
++              </div>
++              <div className="flex items-end gap-3 pb-2">
++                <Switch
++                  checked={form.notify_whatsapp ?? true}
++                  onCheckedChange={(v) => setForm({ ...form, notify_whatsapp: v })}
++                  id="notify"
++                />
++                <Label htmlFor="notify" className="cursor-pointer">
++                  Avisar no WhatsApp
++                </Label>
++              </div>
++            </div>
++            <div className="space-y-2">
++              <Label>Observações internas</Label>
++              <Textarea
++                rows={2}
++                value={form.notes ?? ''}
++                onChange={(e) => setForm({ ...form, notes: e.target.value })}
++              />
++            </div>
++          </div>
++          <DialogFooter>
++            <Button variant="outline" onClick={() => setOpen(false)}>
++              Cancelar
++            </Button>
++            <Button onClick={handleSubmit} disabled={saving}>
++              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
++              {editing ? 'Salvar' : 'Registrar'}
++            </Button>
++          </DialogFooter>
++        </DialogContent>
++      </Dialog>
++    </div>
++  );
++};
++
++export default AdminServicesPage;
+diff --git a/supabase/config.toml b/supabase/config.toml
+index 126bdbc..dd343e1 100644
+--- a/supabase/config.toml
++++ b/supabase/config.toml
+@@ -44,3 +44,8 @@ verify_jwt = false
+ # Verificação de assinatura (X-Hub-Signature-256) é feita dentro da função.
+ [functions.whatsapp-webhook]
+ verify_jwt = false
++
++# Notificação de serviço no WhatsApp — chamada pelo painel (admin/editor logado).
++# A própria função revalida o papel admin/editor.
++[functions.service-notify]
++verify_jwt = true
+diff --git a/supabase/functions/service-notify/index.ts b/supabase/functions/service-notify/index.ts
+new file mode 100644
+index 0000000..43228ce
+--- /dev/null
++++ b/supabase/functions/service-notify/index.ts
+@@ -0,0 +1,160 @@
++// service-notify — avisa o cliente no WhatsApp quando o status de uma ordem de
++// serviço muda. Chamada pelo painel admin (usuário autenticado admin/editor).
++//
++// Observação importante sobre WhatsApp: mensagens proativas (fora da janela de
++// 24h desde a última mensagem do cliente) exigem um TEMPLATE aprovado na Meta.
++// Esta função envia:
++//   - um TEMPLATE, se WHATSAPP_SERVICE_TEMPLATE estiver configurado (recomendado);
++//   - senão, texto livre (funciona quando o cliente falou com a loja nas últimas 24h).
++
++import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
++import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
++
++const corsHeaders = {
++  'Access-Control-Allow-Origin': '*',
++  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
++};
++
++const GRAPH_VERSION = 'v21.0';
++const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
++
++const onlyDigits = (s: string | null | undefined) => (s ?? '').replace(/\D+/g, '');
++
++// Garante DDI 55 (Brasil) quando vier só DDD + número.
++const normalizePhone = (raw: string) => {
++  const d = onlyDigits(raw);
++  if (!d) return '';
++  return d.length <= 11 ? `55${d}` : d;
++};
++
++const STATUS_MESSAGE: Record<string, string> = {
++  nao_iniciado: 'Recebemos seu equipamento e seu serviço está na fila de atendimento.',
++  em_andamento: 'Boa notícia! Seu serviço já está em andamento.',
++  concluido: 'Seu serviço foi concluído! Já pode retirar na loja ou combinar a entrega com a gente.',
++  entregue: 'Serviço entregue. Obrigado pela preferência! Qualquer coisa, é só chamar.',
++  cancelado: 'Seu serviço foi cancelado. Se tiver qualquer dúvida, fale com a gente por aqui.',
++};
++
++serve(async (req) => {
++  if (req.method === 'OPTIONS') {
++    return new Response('ok', { headers: corsHeaders });
++  }
++
++  try {
++    const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
++    const SERVICE_ROLE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
++    const ANON_KEY = Deno.env.get('SUPABASE_PUBLISHABLE_KEY')!;
++
++    // --- Autorização: só admin/editor logado ---
++    const authHeader = req.headers.get('Authorization');
++    if (!authHeader) {
++      return json({ success: false, message: 'Não autorizado' }, 401);
++    }
++    const anonClient = createClient(SUPABASE_URL, ANON_KEY, {
++      global: { headers: { Authorization: authHeader } },
++    });
++    const { data: { user } } = await anonClient.auth.getUser();
++    if (!user) return json({ success: false, message: 'Sessão inválida' }, 401);
++
++    const admin = createClient(SUPABASE_URL, SERVICE_ROLE);
++    const { data: role } = await admin
++      .from('user_roles')
++      .select('role')
++      .eq('user_id', user.id)
++      .in('role', ['admin', 'editor'])
++      .maybeSingle();
++    if (!role) return json({ success: false, message: 'Acesso restrito à equipe' }, 403);
++
++    // --- Ordem de serviço ---
++    const { serviceOrderId } = await req.json().catch(() => ({}));
++    if (!serviceOrderId) return json({ success: false, message: 'serviceOrderId é obrigatório' }, 400);
++
++    const { data: order, error } = await admin
++      .from('service_orders')
++      .select('customer_name, customer_phone, equipment, status, notify_whatsapp')
++      .eq('id', serviceOrderId)
++      .maybeSingle();
++    if (error || !order) return json({ success: false, message: 'Serviço não encontrado' }, 404);
++
++    if (!order.notify_whatsapp) {
++      return json({ success: true, skipped: 'notificação desativada para este serviço' }, 200);
++    }
++
++    const to = normalizePhone(order.customer_phone);
++    if (!to) return json({ success: false, message: 'Telefone do cliente inválido' }, 400);
++
++    const TOKEN = Deno.env.get('WHATSAPP_TOKEN');
++    const PHONE_ID = Deno.env.get('WHATSAPP_PHONE_NUMBER_ID');
++    if (!TOKEN || !PHONE_ID) {
++      return json({ success: false, message: 'WhatsApp não configurado' }, 503);
++    }
++
++    const firstName = (order.customer_name || '').trim().split(/\s+/)[0] || 'tudo bem';
++    const statusText = STATUS_MESSAGE[order.status] ?? `Status do seu serviço: ${order.status}.`;
++    const equipment = order.equipment ? ` (${order.equipment})` : '';
++    const fullText = `Olá, ${firstName}! Atualização do seu serviço na Daniel Bike Shop${equipment}:\n\n${statusText}`;
++
++    const template = Deno.env.get('WHATSAPP_SERVICE_TEMPLATE'); // nome do template aprovado (opcional)
++    const templateLang = Deno.env.get('WHATSAPP_SERVICE_TEMPLATE_LANG') || 'pt_BR';
++
++    const payload = template
++      ? {
++          messaging_product: 'whatsapp',
++          to,
++          type: 'template',
++          template: {
++            name: template,
++            language: { code: templateLang },
++            // O template precisa ter 2 variáveis no corpo: {{1}} nome, {{2}} status.
++            components: [
++              {
++                type: 'body',
++                parameters: [
++                  { type: 'text', text: firstName },
++                  { type: 'text', text: statusText },
++                ],
++              },
++            ],
++          },
++        }
++      : {
++          messaging_product: 'whatsapp',
++          to,
++          type: 'text',
++          text: { body: fullText },
++        };
++
++    const resp = await fetch(`${GRAPH_BASE}/${PHONE_ID}/messages`, {
++      method: 'POST',
++      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
++      body: JSON.stringify(payload),
++    });
++
++    if (!resp.ok) {
++      const errText = await resp.text();
++      console.error('WhatsApp send failed:', resp.status, errText);
++      // 131047 / janela de 24h: cliente precisa ter falado recentemente OU usar template.
++      return json(
++        {
++          success: false,
++          message:
++            'Falha ao enviar no WhatsApp. Para avisos fora da janela de 24h, configure um template aprovado (WHATSAPP_SERVICE_TEMPLATE).',
++          detail: errText,
++        },
++        502,
++      );
++    }
++
++    return json({ success: true, sentVia: template ? 'template' : 'text' }, 200);
++  } catch (e) {
++    console.error('service-notify error:', e);
++    return json({ success: false, message: e instanceof Error ? e.message : 'Erro interno' }, 500);
++  }
++});
++
++function json(body: unknown, status: number) {
++  return new Response(JSON.stringify(body), {
++    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
++    status,
++  });
++}
+diff --git a/supabase/functions/whatsapp-webhook/README.md b/supabase/functions/whatsapp-webhook/README.md
+index 0a0d2fa..6773b5b 100644
+--- a/supabase/functions/whatsapp-webhook/README.md
++++ b/supabase/functions/whatsapp-webhook/README.md
+@@ -99,6 +99,32 @@ típica custa centavos.
+ - Para devolver a conversa para a IA: mude o `status` da linha em
+   `whatsapp_conversations` de `human` para `bot`.
+ 
++## Aba de Serviços + avisos no WhatsApp (`service-notify`)
++
++O admin tem a aba **Serviços** (oficina): registrar um serviço, mudar o status
++(não iniciado → em andamento → concluído → entregue) e, a cada mudança, o cliente
++é avisado no WhatsApp pela função `service-notify`.
++
++```bash
++supabase functions deploy service-notify
++```
++
++> ⚠️ **Janela de 24h da Meta:** mensagens proativas (fora de 24h da última
++> mensagem do cliente) exigem um **template aprovado**. A função envia texto livre
++> por padrão (funciona se o cliente falou com a loja nas últimas 24h). Para garantir
++> a entrega sempre, crie um template na Meta com 2 variáveis no corpo
++> (`{{1}}` nome, `{{2}}` status) e configure:
++> ```bash
++> supabase secrets set WHATSAPP_SERVICE_TEMPLATE="atualizacao_servico"
++> supabase secrets set WHATSAPP_SERVICE_TEMPLATE_LANG="pt_BR"
++> ```
++
++## Treinar o atendente (admin → Atendente IA)
++
++No admin, a aba **Atendente IA** liga/desliga o bot e gerencia a **FAQ** — o que
++você escreve lá é injetado no system prompt e usado nas respostas na hora. É o
++jeito mais rápido de "treinar" o atendente sem mexer em código.
++
+ ## Base de conhecimento (FAQ)
+ 
+ A tabela `faqs` (migration `..._faqs_knowledge_base.sql`) guarda perguntas e
+diff --git a/supabase/functions/whatsapp-webhook/index.ts b/supabase/functions/whatsapp-webhook/index.ts
+index 579ee01..82d9cdf 100644
+--- a/supabase/functions/whatsapp-webhook/index.ts
++++ b/supabase/functions/whatsapp-webhook/index.ts
+@@ -35,18 +35,38 @@ Frete: calculado no checkout do site. Política atual: frete grátis acima de R$
+ Retirada: dá para combinar retirada na loja em Belo Horizonte/MG.
+ Site da loja: ${SITE_URL}`;
+ 
+-const SYSTEM_PROMPT = `Você é o atendente virtual da Daniel Bike Shop, uma loja de bicicletas, peças e acessórios em Belo Horizonte/MG. Você atende clientes pelo WhatsApp.
+-
+-Como você se comporta:
+-- Fale como um vendedor brasileiro experiente e simpático: linguagem natural, calorosa e direta. Trate o cliente por "você".
+-- Seja objetivo. Mensagem de WhatsApp é curta — nada de textão. Quebre em frases curtas.
+-- NÃO use emojis.
+-- Use *negrito* (asteriscos) com moderação, só para destacar nome de produto ou preço.
+-- NUNCA invente preço, estoque, prazo ou informação da loja. Sempre use as ferramentas para consultar dados reais antes de falar sobre produtos, preços e disponibilidade.
+-- Se o cliente perguntar de um produto, use "buscar_produtos". Se não achar, diga que não encontrou e ofereça alternativas próximas.
++const SYSTEM_PROMPT = `Você é o atendente virtual da Daniel Bike Shop, uma loja de bicicletas, peças, acessórios e oficina (serviços) em Belo Horizonte/MG. Você atende os clientes pelo WhatsApp como um vendedor de verdade.
++
++PERSONALIDADE E TOM
++- Fale como um vendedor brasileiro experiente, simpático e gente boa: natural, caloroso e direto. Trate o cliente por "você".
++- Mensagem de WhatsApp é curta — nada de textão. Frases curtas. Faça UMA pergunta por vez.
++- NÃO use emojis. Use *negrito* com moderação, só para nome de produto ou preço.
++- Cumprimente no primeiro contato e demonstre que quer ajudar de verdade.
++
++COMO ATENDER (igual a um bom vendedor)
++- Entenda a necessidade antes de empurrar produto: pergunte o uso (cidade, trilha, estrada, trabalho), a faixa de preço e, para bikes, a altura/tamanho de quadro se fizer sentido.
++- Recomende 1 a 3 opções que encaixam, explicando rápido por que cada uma serve. Não jogue uma lista gigante.
++- Faça sugestões complementares quando couber (capacete, cadeado, bomba, kit de manutenção) — sem ser chato.
++- Se o cliente está em dúvida entre dois produtos, ajude a comparar de forma simples.
++
++REGRAS DE OURO (não pode errar)
++- NUNCA invente preço, estoque, prazo ou informação da loja. SEMPRE use as ferramentas para consultar dados reais antes de falar de produto, preço ou disponibilidade.
++- Use "buscar_produtos" para procurar e "detalhes_produto" para aprofundar. Se não achar, diga com franqueza e ofereça alternativas próximas.
+ - Sempre que citar um produto, mande o link dele.
+-- Para fechar a compra, oriente o cliente a finalizar pelo site (mande o link do produto) ou ofereça chamar um atendente humano.
+-- Se o cliente pedir para falar com uma pessoa, quiser negociar desconto fora do site, fizer uma reclamação séria, ou for algo que você não resolve, use "escalar_humano" e avise que um atendente vai assumir.
++- Para fechar a compra, oriente a finalizar pelo site (mande o link) ou ofereça chamar um atendente humano para combinar.
++- Use "info_loja" para dúvidas de endereço, horário, pagamento e frete.
++
++SERVIÇOS / OFICINA
++- A loja faz manutenção e reparo (revisão, freio, câmbio, troca de peças, montagem). Se o cliente quiser um serviço, explique que é só trazer/relatar o que precisa; um atendente registra a ordem de serviço e ele recebe as atualizações de status aqui pelo WhatsApp.
++- Para agendar ou registrar um serviço, ou para saber orçamento de mão de obra, use "escalar_humano" (a equipe cadastra o serviço no sistema).
++
++PEDIDOS E PÓS-VENDA
++- Você não acessa o status de pedidos individuais. Se perguntarem "cadê meu pedido", peça o número do pedido e use "escalar_humano" para um atendente verificar.
++
++QUANDO CHAMAR UM HUMANO ("escalar_humano")
++- Cliente pede para falar com uma pessoa; quer negociar desconto fora do site; reclamação séria; registrar/agendar serviço; status de pedido; ou qualquer coisa que você não resolva. Depois de escalar, avise o cliente com simpatia que um atendente vai assumir.
++
++TRANSPARÊNCIA
+ - Se perguntarem se você é um robô/IA, pode dizer com naturalidade que é o assistente virtual da loja e que chama um humano quando precisa.
+ 
+ Informações fixas da loja:
+diff --git a/supabase/migrations/20260616020000_service_orders.sql b/supabase/migrations/20260616020000_service_orders.sql
+new file mode 100644
+index 0000000..553f550
+--- /dev/null
++++ b/supabase/migrations/20260616020000_service_orders.sql
+@@ -0,0 +1,55 @@
++-- Ordens de serviço (oficina): registrar serviços de manutenção/reparo,
++-- acompanhar o status e avisar o cliente no WhatsApp a cada mudança.
++
++-- não começou / em andamento / terminou (+ entregue e cancelado como extras úteis)
++CREATE TYPE public.service_status AS ENUM (
++  'nao_iniciado',
++  'em_andamento',
++  'concluido',
++  'entregue',
++  'cancelado'
++);
++
++CREATE TABLE public.service_orders (
++  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
++  customer_name TEXT NOT NULL,
++  customer_phone TEXT NOT NULL,
++  equipment TEXT,                 -- ex.: "Caloi Elite 29, aro 29"
++  description TEXT,               -- o que será feito / problema relatado
++  status public.service_status NOT NULL DEFAULT 'nao_iniciado',
++  price NUMERIC(10, 2),
++  notes TEXT,
++  notify_whatsapp BOOLEAN NOT NULL DEFAULT true,  -- avisar o cliente automaticamente?
++  created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
++  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
++  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
++);
++
++ALTER TABLE public.service_orders ENABLE ROW LEVEL SECURITY;
++
++CREATE INDEX idx_service_orders_status ON public.service_orders (status, created_at DESC);
++
++-- Admin/editor (equipe da loja) gerenciam tudo. Sem acesso público.
++CREATE POLICY "Staff can view service orders"
++  ON public.service_orders FOR SELECT
++  TO authenticated
++  USING (public.has_admin_or_editor_role(auth.uid()));
++
++CREATE POLICY "Staff can insert service orders"
++  ON public.service_orders FOR INSERT
++  TO authenticated
++  WITH CHECK (public.has_admin_or_editor_role(auth.uid()));
++
++CREATE POLICY "Staff can update service orders"
++  ON public.service_orders FOR UPDATE
++  TO authenticated
++  USING (public.has_admin_or_editor_role(auth.uid()));
++
++CREATE POLICY "Staff can delete service orders"
++  ON public.service_orders FOR DELETE
++  TO authenticated
++  USING (public.has_admin_or_editor_role(auth.uid()));
++
++CREATE TRIGGER update_service_orders_updated_at
++  BEFORE UPDATE ON public.service_orders
++  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+-- 
+2.43.0
+

@@ -39,3 +39,13 @@ verify_jwt = false
 # Envio de e-mail transacional é chamado por outras edge functions e por webhooks.
 [functions.send-order-email]
 verify_jwt = false
+
+# WhatsApp webhook é chamado pelos servidores da Meta, sem JWT.
+# Verificação de assinatura (X-Hub-Signature-256) é feita dentro da função.
+[functions.whatsapp-webhook]
+verify_jwt = false
+
+# Notificação de serviço no WhatsApp — chamada pelo painel (admin/editor logado).
+# A própria função revalida o papel admin/editor.
+[functions.service-notify]
+verify_jwt = true

@@ -30,6 +30,8 @@ import {
   Link as LinkIcon,
   Tag,
   Star,
+  Wrench,
+  Bot,
 } from 'lucide-react';
 import logo from '@/assets/logo.png';
 import { cn } from '@/lib/utils';
@@ -74,6 +76,16 @@ const menuItems = [
     title: 'Avaliações',
     url: '/admin/reviews',
     icon: Star,
+  },
+  {
+    title: 'Serviços',
+    url: '/admin/services',
+    icon: Wrench,
+  },
+  {
+    title: 'Atendente IA',
+    url: '/admin/atendente-ia',
+    icon: Bot,
   },
 ];
 
