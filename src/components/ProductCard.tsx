@@ -120,8 +120,8 @@ const ProductCard = ({ product }: ProductCardProps) => {
         </div>
 
         {isOutOfStock && (
-          <div className="absolute inset-0 z-[2] pointer-events-none bg-white/70 backdrop-blur-[1px] flex items-center justify-center">
-            <span className="bg-foreground/90 text-background font-semibold px-3 py-1 rounded text-sm uppercase tracking-wider">
+          <div className="absolute inset-0 z-[2] pointer-events-none bg-white/75 backdrop-blur-[2px] flex items-center justify-center">
+            <span className="bg-foreground/90 text-background font-bold px-4 py-1.5 rounded-md text-sm uppercase tracking-[0.2em] shadow-lg">
               Esgotado
             </span>
           </div>
