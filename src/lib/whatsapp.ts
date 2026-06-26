@@ -38,11 +38,24 @@ const buildOriginUrl = (path: string) => {
   return `${window.location.origin}${path}`;
 };
 
-interface ProductLite {
+export interface ProductLite {
   id: string;
   slug?: string | null;
   name: string;
   price: number;
+}
+
+export interface LeadData {
+  nome: string;
+  cpf: string;
+  celular: string;
+  email: string;
+  profissao: string;
+  renda: string;
+  escolaridade: string;
+  estadoCivil: string;
+  conjugeNome?: string;
+  conjugeCpf?: string;
 }
 
 const contactBlock = (contact: UserContact): string[] => {
@@ -71,6 +84,41 @@ export const buildProductMessage = (product: ProductLite, contact: UserContact):
     '',
     'Pode me ajudar?',
   ];
+  return lines.join('\n');
+};
+
+/**
+ * Mensagem do "Quero esse" com os dados do cliente — facilita o atendimento
+ * e a análise de crédito/financiamento pro vendedor.
+ */
+export const buildLeadMessage = (product: ProductLite, lead: LeadData): string => {
+  const url = buildOriginUrl(`/produto/${product.slug || product.id}`);
+  const lines = [
+    'Olá! Tenho interesse neste produto:',
+    '',
+    `*Produto:* ${product.name}`,
+    `*Preço:* ${formatPrice(product.price)}`,
+    `*Link:* ${url}`,
+    '',
+    '📝 *DADOS PESSOAIS*',
+    `Nome completo: ${lead.nome}`,
+    `CPF: ${lead.cpf}`,
+    `Celular: ${lead.celular}`,
+    `E-mail: ${lead.email}`,
+    '',
+    '💼 *INFORMAÇÕES PROFISSIONAIS*',
+    `Profissão: ${lead.profissao}`,
+    `Renda Bruta Mensal: ${lead.renda}`,
+    `Escolaridade: ${lead.escolaridade}`,
+    '',
+    '❤️ *ESTADO CIVIL*',
+    `Estado Civil: ${lead.estadoCivil}`,
+  ];
+  if (lead.conjugeNome?.trim() || lead.conjugeCpf?.trim()) {
+    lines.push(`Nome do cônjuge: ${lead.conjugeNome ?? ''}`);
+    lines.push(`CPF do cônjuge: ${lead.conjugeCpf ?? ''}`);
+  }
+  lines.push('', 'Pode me ajudar?');
   return lines.join('\n');
 };
 

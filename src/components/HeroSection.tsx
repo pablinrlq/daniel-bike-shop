@@ -84,10 +84,60 @@ const HeroSection = () => {
     },
   });
 
-  // Prioriza as bikes (pedido do lojista); cai nos banners do admin se não houver
-  // bike com foto ainda (ex.: antes de rodar a sync completa do Bling).
+  // Banners fixos: as fotos que o lojista coloca em public/banner/ (1.jpg, 2.jpg,
+  // 3.jpg). Só entram as que realmente carregam — nunca mostra imagem quebrada.
+  const STATIC_BANNERS: Banner[] = [
+    {
+      id: 'banner-1',
+      title: 'Sua trilha começa aqui',
+      subtitle: 'Mountain bikes Oggi e Rava prontas pra encarar qualquer terreno.',
+      image_url: '/banner/1.jpg',
+      link_url: '/produtos?categoria=bicicletas',
+    },
+    {
+      id: 'banner-2',
+      title: 'Pedale com a gente',
+      subtitle: 'Bikes, peças e acessórios com quem entende e pedala.',
+      image_url: '/banner/2.jpg',
+      link_url: '/produtos',
+    },
+    {
+      id: 'banner-3',
+      title: 'Performance de verdade',
+      subtitle: 'Equipamento de ponta pro seu próximo desafio.',
+      image_url: '/banner/3.jpg',
+      link_url: '/produtos?categoria=bicicletas',
+    },
+  ];
+  const [validStatic, setValidStatic] = useState<Banner[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all(
+      STATIC_BANNERS.map(
+        (b) =>
+          new Promise<Banner | null>((resolve) => {
+            const img = new Image();
+            img.onload = () => resolve(b);
+            img.onerror = () => resolve(null);
+            img.src = b.image_url;
+          }),
+      ),
+    ).then((res) => {
+      if (!cancelled) setValidStatic(res.filter((b): b is Banner => b !== null));
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Prioridade: fotos fixas do lojista -> bikes Oggi/Rava (foto do Bling) -> banners do admin.
   const displayBanners: Banner[] =
-    bikeBanners && bikeBanners.length > 0 ? bikeBanners : adminBanners ?? [];
+    validStatic.length > 0
+      ? validStatic
+      : bikeBanners && bikeBanners.length > 0
+        ? bikeBanners
+        : adminBanners ?? [];
 
   const count = displayBanners.length;
 

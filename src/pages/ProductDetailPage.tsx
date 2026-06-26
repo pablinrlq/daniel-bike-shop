@@ -1,7 +1,7 @@
 import { useParams, Link } from 'react-router-dom';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
-import { useProduct, useProducts } from '@/hooks/useProducts';
+import { useProduct, useProducts, type Product } from '@/hooks/useProducts';
 import { Button } from '@/components/ui/button';
 import { useCart } from '@/contexts/CartContext';
 import { ShoppingCart, MessageCircle, ArrowLeft, Truck, Shield, RotateCcw, AlertTriangle } from 'lucide-react';
@@ -10,18 +10,12 @@ import ProductCard from '@/components/ProductCard';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useEffect, useState } from 'react';
 import { useStoreSettings } from '@/hooks/useStoreSettings';
-import { useAuth } from '@/contexts/AuthContext';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import WishlistButton from '@/components/WishlistButton';
 import ProductReviews from '@/components/ProductReviews';
 import ProductImage from '@/components/ProductImage';
 import SEO from '@/components/SEO';
-import {
-  buildProductMessage,
-  buildWhatsappUrl,
-  resolveWhatsappNumber,
-  userToContact,
-} from '@/lib/whatsapp';
+import BuyLeadDialog from '@/components/BuyLeadDialog';
 
 const SITE_URL = (import.meta.env.VITE_SITE_URL as string | undefined) || 'https://danielbikeshop.com';
 
@@ -31,8 +25,8 @@ const ProductDetailPage = () => {
   const { data: allProducts } = useProducts();
   const { addToCart } = useCart();
   const { data: storeSettings } = useStoreSettings();
-  const { user } = useAuth();
   const [selectedImage, setSelectedImage] = useState(0);
+  const [leadOpen, setLeadOpen] = useState(false);
 
   const isOutOfStock = product ? product.stock <= 0 : false;
   const isStoreOpen = storeSettings?.is_store_open ?? true;
@@ -104,17 +98,12 @@ const ProductDetailPage = () => {
     toast.success(`${product.name} adicionado ao carrinho!`);
   };
 
-  const handleWhatsapp = () => {
+  const handleQueroEsse = () => {
     if (!canPurchase) {
       toast.error(isStoreOpen ? 'Produto esgotado' : 'A loja está fechada no momento.');
       return;
     }
-    const number = resolveWhatsappNumber(storeSettings?.whatsapp);
-    const message = buildProductMessage(
-      { id: product.id, slug: product.slug, name: product.name, price: product.price },
-      userToContact(user),
-    );
-    window.open(buildWhatsappUrl(number, message), '_blank', 'noopener,noreferrer');
+    setLeadOpen(true);
   };
 
   const formatPrice = (price: number) => {
@@ -267,7 +256,7 @@ const ProductDetailPage = () => {
               <div className="mt-8 flex flex-wrap gap-3">
                 <Button
                   size="lg"
-                  onClick={handleWhatsapp}
+                  onClick={handleQueroEsse}
                   disabled={!canPurchase}
                   className="gap-2 bg-[#25D366] hover:bg-[#20BA5A] text-white"
                 >
@@ -325,6 +314,11 @@ const ProductDetailPage = () => {
           )}
         </div>
       </main>
+      <BuyLeadDialog
+        product={{ id: product.id, slug: product.slug, name: product.name, price: product.price }}
+        open={leadOpen}
+        onOpenChange={setLeadOpen}
+      />
       <Footer />
     </div>
   );
@@ -334,7 +328,7 @@ const ProductDetailPage = () => {
  * Injeta JSON-LD do tipo Product no <head> para rich snippets do Google.
  * Schema.org/Product — preço, disponibilidade, imagens, marca.
  */
-const ProductJsonLd = ({ product }: { product: any }) => {
+const ProductJsonLd = ({ product }: { product: Product }) => {
   useEffect(() => {
     const id = `jsonld-product-${product.id}`;
     let script = document.getElementById(id) as HTMLScriptElement | null;
