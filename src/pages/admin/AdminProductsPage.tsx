@@ -54,6 +54,8 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import ProductImageUpload from '@/components/admin/ProductImageUpload';
+import { fallbackImageFor } from '@/lib/productFallback';
+import { overrideImageForSku } from '@/lib/productImageOverrides';
 
 interface ProductImage {
   id?: string;
@@ -66,6 +68,7 @@ interface Product {
   id: string;
   name: string;
   slug: string;
+  sku: string | null;
   description: string | null;
   brand: string | null;
   model: string | null;
@@ -83,7 +86,16 @@ interface Product {
   tamanho_quadro: string | null;
   created_at: string;
   categories?: { name: string } | null;
+  product_images?: { image_url: string; is_primary: boolean; display_order: number }[];
 }
+
+// Miniatura da lista: foto própria (principal) se houver; senão a foto/plaquinha
+// da categoria (mesma do site). hasOwn diz se o produto já tem foto de verdade.
+const resolveThumb = (p: Product): { src: string; hasOwn: boolean } => {
+  const own =
+    p.product_images?.find((i) => i.is_primary)?.image_url || p.product_images?.[0]?.image_url;
+  return { src: own || overrideImageForSku(p.sku) || fallbackImageFor(p.name), hasOwn: !!own };
+};
 
 interface Category {
   id: string;
@@ -134,7 +146,7 @@ const AdminProductsPage: React.FC = () => {
     queryFn: async () => {
       let query = supabase
         .from('products')
-        .select('*, categories(name)')
+        .select('*, categories(name), product_images(image_url, is_primary, display_order)')
         .order('created_at', { ascending: false });
 
       if (searchTerm) {
@@ -245,7 +257,7 @@ const AdminProductsPage: React.FC = () => {
         description: selectedProduct ? 'Produto atualizado.' : 'Produto criado.',
       });
     },
-    onError: (error: any) => {
+    onError: (error: { message?: string }) => {
       toast({
         title: 'Erro',
         description: error.message || 'Erro ao salvar produto.',
@@ -270,7 +282,7 @@ const AdminProductsPage: React.FC = () => {
         description: 'Produto excluído.',
       });
     },
-    onError: (error: any) => {
+    onError: (error: { message?: string }) => {
       toast({
         title: 'Erro',
         description: error.message || 'Erro ao excluir produto.',
@@ -297,7 +309,7 @@ const AdminProductsPage: React.FC = () => {
           : 'O produto foi ocultado dos clientes.',
       });
     },
-    onError: (error: any) => {
+    onError: (error: { message?: string }) => {
       toast({
         title: 'Erro',
         description: error.message || 'Erro ao alterar status.',
@@ -473,18 +485,30 @@ const AdminProductsPage: React.FC = () => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {products.map((product) => (
+                  {products.map((product) => {
+                    const thumb = resolveThumb(product);
+                    return (
                     <TableRow key={product.id}>
                       <TableCell>
                         <div className="flex items-center gap-3">
-                          <div className="h-10 w-10 rounded bg-muted flex items-center justify-center">
-                            <Package className="h-5 w-5 text-muted-foreground" />
-                          </div>
+                          <img
+                            src={thumb.src}
+                            alt=""
+                            loading="lazy"
+                            className="h-12 w-12 rounded object-cover bg-white border border-border flex-shrink-0"
+                          />
                           <div>
                             <div className="font-medium">{product.name}</div>
-                            {product.brand && (
-                              <div className="text-sm text-muted-foreground">{product.brand}</div>
-                            )}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {product.brand && (
+                                <span className="text-sm text-muted-foreground">{product.brand}</span>
+                              )}
+                              {!thumb.hasOwn && (
+                                <span className="text-[10px] uppercase tracking-wide text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
+                                  sem foto própria
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </TableCell>
@@ -555,7 +579,8 @@ const AdminProductsPage: React.FC = () => {
                         </div>
                       </TableCell>
                     </TableRow>
-                  ))}
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>

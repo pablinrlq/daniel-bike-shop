@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { categorizeByName, fallbackImageFor } from './productFallback';
+import { categorizeByName, fallbackImageFor, topCategoryByName } from './productFallback';
 
 describe('categorizeByName', () => {
   const cases: Array<[string, string]> = [
@@ -70,5 +70,38 @@ describe('fallbackImageFor', () => {
   it('item desconhecido cai na plaquinha de Acessório', () => {
     const uri = fallbackImageFor('XYZ DESCONHECIDO');
     expect(uri.startsWith('data:image/svg+xml,')).toBe(true);
+  });
+});
+
+describe('topCategoryByName (categorização automática para o filtro)', () => {
+  const cases: Array<[string, string]> = [
+    ['BIC OGGI 29 BW 7.0 CUES 9V', 'bicicletas'],
+    ['BICICLETA OGGI 29 BW 7.0', 'bicicletas'],
+    ['PNEU 29 X 2.10 SRI 68', 'pecas'],
+    ['ARO 29 X 32F ALUM MTB', 'pecas'],
+    ['CAMARA 700X23/32C BUTILICA', 'pecas'],
+    ['QUADRO 26 ALM DJ TUFF', 'pecas'],
+    ['FREIO DISC HIDR ALU', 'pecas'],
+    ['CAMBIO SHIMANO DEORE', 'pecas'],
+    ['CORRENTE KMC X11', 'pecas'],
+    ['CABO CAMBIO TRAS. MTB', 'pecas'],
+    ['MANOPLA MTB MOD 2 PT', 'pecas'],
+    ['CAPACETE AERODINAMICO PRO', 'seguranca'],
+    ['LUVAS GEL PREMIUM', 'acessorios'],
+    ['SAPATILHA ROAD SH-RC102', 'acessorios'],
+    ['CAMISA CASUAL T-DRY', 'acessorios'],
+    ['GRAXA SLICKGEASE 500G', 'acessorios'],
+    ['CHAVE TRIANGULO', 'acessorios'],
+    ['CESTINHA', 'acessorios'],
+    ['XYZ ITEM DESCONHECIDO', 'acessorios'],
+  ];
+
+  it.each(cases)('%s -> %s', (name, slug) => {
+    expect(topCategoryByName(name).slug).toBe(slug);
+  });
+
+  it('nome vazio/nulo cai em acessorios', () => {
+    expect(topCategoryByName('').slug).toBe('acessorios');
+    expect(topCategoryByName(undefined).slug).toBe('acessorios');
   });
 });

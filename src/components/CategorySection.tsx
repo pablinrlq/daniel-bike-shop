@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { useCategories } from '@/hooks/useProducts';
+import { useNavCategories } from '@/hooks/useProducts';
 import { Bike, Wrench, ShoppingBag, Package, ArrowRight } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
@@ -23,7 +23,7 @@ const CATEGORY_IMAGE_FALLBACK =
   'https://images.unsplash.com/photo-1485965120184-e220f721d03e?w=800&q=70&auto=format';
 
 const CategorySection = () => {
-  const { data: categories, isLoading } = useCategories();
+  const { data: categories, isLoading } = useNavCategories();
 
   if (isLoading) {
     return (

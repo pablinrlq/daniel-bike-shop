@@ -8,6 +8,7 @@ import { useCart } from '@/contexts/CartContext';
 import { useStoreSettings } from '@/hooks/useStoreSettings';
 import { useAuth } from '@/contexts/AuthContext';
 import WishlistButton from '@/components/WishlistButton';
+import StockAlertButton from '@/components/StockAlertButton';
 import ProductImage from '@/components/ProductImage';
 import {
   buildProductMessage,
@@ -184,6 +185,14 @@ const ProductCard = ({ product }: ProductCardProps) => {
             </span>
           )}
         </div>
+
+        {isOutOfStock && (
+          <StockAlertButton
+            productId={product.id}
+            productName={product.name}
+            className="w-full mt-3"
+          />
+        )}
       </div>
     </div>
   );

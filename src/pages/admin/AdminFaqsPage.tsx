@@ -6,6 +6,7 @@ import {
   useDeleteFaq,
   useWhatsappAi,
   useToggleWhatsappAi,
+  useToggleWhatsappFollowup,
   type Faq,
   type FaqInput,
 } from '@/hooks/useFaqs';
@@ -34,6 +35,7 @@ const AdminFaqsPage = () => {
   const deleteFaq = useDeleteFaq();
   const { data: ai } = useWhatsappAi();
   const toggleAi = useToggleWhatsappAi();
+  const toggleFollowup = useToggleWhatsappFollowup();
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Faq | null>(null);
@@ -99,9 +101,23 @@ const AdminFaqsPage = () => {
                 : 'Desligado — ninguém recebe resposta automática'}
             </Label>
           </div>
+          <div className="mt-5 pt-5 border-t flex items-center gap-3">
+            <Switch
+              checked={ai?.whatsapp_followup_enabled ?? true}
+              disabled={!ai || toggleFollowup.isPending}
+              onCheckedChange={(v) => ai && toggleFollowup.mutate({ id: ai.id, enabled: v })}
+              id="followup-toggle"
+            />
+            <Label htmlFor="followup-toggle" className="cursor-pointer">
+              {ai?.whatsapp_followup_enabled ?? true
+                ? 'Follow-up proativo ligado — a IA reengaja quem veio do site e não fechou'
+                : 'Follow-up proativo desligado'}
+            </Label>
+          </div>
           <p className="text-xs text-muted-foreground mt-3">
             Dica: mesmo ligado, quando você assume uma conversa pelo WhatsApp a IA fica quieta
-            naquele contato até a equipe liberar de novo.
+            naquele contato até a equipe liberar de novo. O follow-up só acontece dentro de 24h
+            (regra do WhatsApp), no máximo 2 vezes por cliente.
           </p>
         </CardContent>
       </Card>
