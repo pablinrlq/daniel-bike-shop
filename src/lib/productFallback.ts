@@ -125,7 +125,7 @@ const RULES: CategoryDef[] = [
   { key: 'direcao', test: /\b(JOGO DIR|DIRECAO)\b/, label: 'Direção', icon: 'gear' },
   { key: 'ferramenta', test: /\b(FERRAMENTA|CHAVE|REPARO|EXTRATOR|CORTADOR|DADO|KIT FERRAMENTA)\b/, label: 'Ferramenta', icon: 'tool' },
   { key: 'servico', test: /\b(MAO DE OBRA|SERVICO|INSTALACAO)\b/, label: 'Serviço', icon: 'tool' },
-  { key: 'bike', test: /\b(BIKE|BICICLETA|BIC)(S)?\b/, label: 'Bicicleta', icon: 'bike', photo: P('bike') },
+  { key: 'bike', test: /\b(BIKE|BICICLETA|BICI|BIC)(S)?\b/, label: 'Bicicleta', icon: 'bike', photo: P('bike') },
 ];
 
 const FALLBACK_DEF: CategoryDef = { key: 'outros', test: /.^/, label: 'Acessório', icon: 'box' };

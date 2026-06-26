@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Product } from '@/hooks/useProducts';
 import { Product as CartProduct } from '@/types/product';
 import { Button } from '@/components/ui/button';
@@ -6,16 +7,10 @@ import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useCart } from '@/contexts/CartContext';
 import { useStoreSettings } from '@/hooks/useStoreSettings';
-import { useAuth } from '@/contexts/AuthContext';
 import WishlistButton from '@/components/WishlistButton';
 import StockAlertButton from '@/components/StockAlertButton';
 import ProductImage from '@/components/ProductImage';
-import {
-  buildProductMessage,
-  buildWhatsappUrl,
-  resolveWhatsappNumber,
-  userToContact,
-} from '@/lib/whatsapp';
+import BuyLeadDialog from '@/components/BuyLeadDialog';
 
 interface ProductCardProps {
   product: Product;
@@ -24,23 +19,18 @@ interface ProductCardProps {
 const ProductCard = ({ product }: ProductCardProps) => {
   const { addToCart } = useCart();
   const { data: storeSettings } = useStoreSettings();
-  const { user } = useAuth();
+  const [leadOpen, setLeadOpen] = useState(false);
 
   const isOutOfStock = product.stock <= 0;
   const isStoreOpen = storeSettings?.is_store_open ?? true;
   const canPurchase = isStoreOpen && !isOutOfStock;
 
-  const handleWhatsapp = () => {
+  const handleQueroEsse = () => {
     if (!canPurchase) {
       toast.error(isStoreOpen ? 'Produto esgotado' : 'A loja está fechada no momento.');
       return;
     }
-    const number = resolveWhatsappNumber(storeSettings?.whatsapp);
-    const message = buildProductMessage(
-      { id: product.id, slug: product.slug, name: product.name, price: product.price },
-      userToContact(user),
-    );
-    window.open(buildWhatsappUrl(number, message), '_blank', 'noopener,noreferrer');
+    setLeadOpen(true);
   };
 
   const handleAddToCart = () => {
@@ -156,7 +146,7 @@ const ProductCard = ({ product }: ProductCardProps) => {
             </Button>
             <Button
               size="sm"
-              onClick={handleWhatsapp}
+              onClick={handleQueroEsse}
               disabled={!canPurchase}
               className="flex-1 gap-1 bg-[#25D366] hover:bg-[#20BA5A] text-white"
             >
@@ -194,6 +184,12 @@ const ProductCard = ({ product }: ProductCardProps) => {
           />
         )}
       </div>
+
+      <BuyLeadDialog
+        product={{ id: product.id, slug: product.slug, name: product.name, price: product.price }}
+        open={leadOpen}
+        onOpenChange={setLeadOpen}
+      />
     </div>
   );
 };
