@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { Tables } from '@/integrations/supabase/types';
-import { fallbackImageFor, categorizeByName } from '@/lib/productFallback';
+import { fallbackImageFor, categorizeByName, topCategoryByName, TOP_CATEGORIES } from '@/lib/productFallback';
+import { isInCatalog } from '@/data/catalogAllowlist';
 import { overrideImageForSku } from '@/lib/productImageOverrides';
 
 export type DbProduct = Tables<'products'> & {
@@ -41,8 +42,12 @@ const transformProduct = (dbProduct: DbProduct): Product => {
   const primaryImage = dbProduct.images?.find(img => img.is_primary);
   const mainImage = primaryImage?.image_url || dbProduct.images?.[0]?.image_url || fallback;
   // Sem categoria no banco? Usa a categoria inferida pelo nome ("Quadro",
-  // "Pneu"...) no lugar de "Sem categoria". Não afeta o filtro (que usa o slug).
+  // "Pneu"...) no lugar de "Sem categoria".
   const categoryLabel = dbProduct.category?.name || categorizeByName(dbProduct.name).label;
+  // O SLUG (usado no filtro e na nav) precisa ser uma categoria de TOPO. Como o
+  // Bling não preenche a categoria, inferimos pelo nome — assim o filtro por
+  // categoria funciona em vez de jogar tudo em "outros".
+  const categorySlug = dbProduct.category?.slug || topCategoryByName(dbProduct.name).slug;
 
   return {
     id: dbProduct.id,
@@ -53,7 +58,7 @@ const transformProduct = (dbProduct: DbProduct): Product => {
     originalPrice: dbProduct.promotional_price ? dbProduct.price : undefined,
     promotionalPrice: dbProduct.promotional_price || undefined,
     category: categoryLabel,
-    categorySlug: dbProduct.category?.slug || 'outros',
+    categorySlug,
     image: mainImage,
     primaryImage: mainImage,
     images: hasOwnImage
@@ -83,11 +88,14 @@ export const useProducts = () => {
           images:product_images(*)
         `)
         .eq('is_active', true)
-        .gt('stock_quantity', 0)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      return (data as DbProduct[]).map(transformProduct);
+      // Só produtos do catálogo (CSV do Bling). Mostra também os esgotados,
+      // pra permitir o "avise-me quando chegar".
+      return (data as DbProduct[])
+        .filter((d) => isInCatalog({ sku: d.sku, name: d.name }))
+        .map(transformProduct);
     },
   });
 };
@@ -110,7 +118,9 @@ export const useFeaturedProducts = () => {
         .limit(6);
 
       if (error) throw error;
-      return (data as DbProduct[]).map(transformProduct);
+      return (data as DbProduct[])
+        .filter((d) => isInCatalog({ sku: d.sku, name: d.name }))
+        .map(transformProduct);
     },
   });
 };
@@ -126,8 +136,7 @@ export const useProductsByCategory = (categorySlug: string) => {
           category:categories(*),
           images:product_images(*)
         `)
-        .eq('is_active', true)
-        .gt('stock_quantity', 0);
+        .eq('is_active', true);
 
       if (categorySlug && categorySlug !== 'todos') {
         const { data: category } = await supabase
@@ -144,7 +153,9 @@ export const useProductsByCategory = (categorySlug: string) => {
       const { data, error } = await query.order('created_at', { ascending: false });
 
       if (error) throw error;
-      return (data as DbProduct[]).map(transformProduct);
+      return (data as DbProduct[])
+        .filter((d) => isInCatalog({ sku: d.sku, name: d.name }))
+        .map(transformProduct);
     },
   });
 };
@@ -195,36 +206,42 @@ export interface NavCategory {
   id: string;
   name: string;
   slug: string;
+  description?: string;
 }
 
 /**
- * Categorias para mostrar na navbar/footer.
- * Filtra: só categorias ativas que têm pelo menos 1 produto ativo com estoque.
- * Assim a nav nunca leva pra uma listagem vazia.
+ * Categorias para mostrar na navbar/home/footer.
+ * Lista só as categorias (de topo) que têm pelo menos 1 produto ativo em estoque.
+ * Como o Bling não preenche a categoria no banco, a categoria é INFERIDA pelo
+ * nome do produto — assim a nav nunca leva pra uma listagem vazia e o catálogo
+ * fica organizado automaticamente.
  */
 export const useNavCategories = () => {
   return useQuery({
     queryKey: ['nav-categories'],
     queryFn: async (): Promise<NavCategory[]> => {
       const { data, error } = await supabase
-        .from('categories')
-        .select('id, name, slug, products!inner(id)')
-        .eq('is_active', true)
-        .eq('products.is_active', true)
-        .gt('products.stock_quantity', 0)
-        .order('name');
+        .from('products')
+        .select('sku, name, category:categories(name, slug)')
+        .eq('is_active', true);
 
       if (error) throw error;
-      // O inner join devolve a categoria com array de produtos; só queremos a categoria.
-      // E como uma categoria pode vir várias vezes, deduplica por id.
-      const seen = new Set<string>();
-      const result: NavCategory[] = [];
-      for (const row of data ?? []) {
-        if (seen.has(row.id)) continue;
-        seen.add(row.id);
-        result.push({ id: row.id, name: row.name, slug: row.slug });
+
+      const seen = new Map<string, NavCategory>();
+      for (const row of (data ?? []) as { sku: string | null; name: string; category: { name: string; slug: string } | null }[]) {
+        if (!isInCatalog({ sku: row.sku, name: row.name })) continue;
+        const slug = row.category?.slug || topCategoryByName(row.name).slug;
+        const name = row.category?.name || topCategoryByName(row.name).label;
+        if (!seen.has(slug)) seen.set(slug, { id: slug, name, slug });
       }
-      return result;
+
+      // Ordena pelas categorias de topo conhecidas; o resto vai pro fim.
+      const order = TOP_CATEGORIES.map((c) => c.slug);
+      return [...seen.values()].sort((a, b) => {
+        const ia = order.indexOf(a.slug);
+        const ib = order.indexOf(b.slug);
+        return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+      });
     },
     staleTime: 5 * 60 * 1000, // 5 min
   });

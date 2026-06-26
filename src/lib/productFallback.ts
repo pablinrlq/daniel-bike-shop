@@ -162,6 +162,76 @@ export const categorizeByName = (name: string | null | undefined): CategoryDef =
   return best ?? FALLBACK_DEF;
 };
 
+/**
+ * Categoria de TOPO (a que vai pro filtro/nav da loja) — sempre uma das quatro
+ * oficiais, casando com os slugs das categorias criadas no banco.
+ */
+export interface TopCategory {
+  slug: string;
+  label: string;
+}
+
+const TOP_BICICLETAS: TopCategory = { slug: 'bicicletas', label: 'Bicicletas' };
+const TOP_PECAS: TopCategory = { slug: 'pecas', label: 'Peças' };
+const TOP_ACESSORIOS: TopCategory = { slug: 'acessorios', label: 'Acessórios' };
+const TOP_SEGURANCA: TopCategory = { slug: 'seguranca', label: 'Equipamentos de Segurança' };
+
+/** Ordem em que as categorias de topo aparecem no filtro/nav. */
+export const TOP_CATEGORIES: TopCategory[] = [
+  TOP_BICICLETAS,
+  TOP_PECAS,
+  TOP_ACESSORIOS,
+  TOP_SEGURANCA,
+];
+
+// Tipo inferido (key de categorizeByName) -> categoria de topo da loja.
+const KEY_TO_TOP: Record<string, TopCategory> = {
+  bike: TOP_BICICLETAS,
+  // Peças (componentes da bike)
+  camara: TOP_PECAS,
+  pneu: TOP_PECAS,
+  aro: TOP_PECAS,
+  roda: TOP_PECAS,
+  cubo: TOP_PECAS,
+  raio: TOP_PECAS,
+  niple: TOP_PECAS,
+  quadro: TOP_PECAS,
+  suspensao: TOP_PECAS,
+  garfo: TOP_PECAS,
+  disco: TOP_PECAS,
+  freio: TOP_PECAS,
+  cassete: TOP_PECAS,
+  corrente: TOP_PECAS,
+  cambio: TOP_PECAS,
+  pedivela: TOP_PECAS,
+  pedal: TOP_PECAS,
+  movimento: TOP_PECAS,
+  selim: TOP_PECAS,
+  canote: TOP_PECAS,
+  manopla: TOP_PECAS,
+  guidao: TOP_PECAS,
+  cabo: TOP_PECAS,
+  direcao: TOP_PECAS,
+  // Segurança
+  capacete: TOP_SEGURANCA,
+  // Acessórios / consumíveis / vestuário / ferramentas / serviço
+  luva: TOP_ACESSORIOS,
+  sapatilha: TOP_ACESSORIOS,
+  roupa: TOP_ACESSORIOS,
+  lube: TOP_ACESSORIOS,
+  ferramenta: TOP_ACESSORIOS,
+  servico: TOP_ACESSORIOS,
+};
+
+/**
+ * Descobre a categoria de TOPO de um produto pelo nome — categorização
+ * automática. Cai em "Acessórios" quando não reconhece o tipo.
+ */
+export const topCategoryByName = (name: string | null | undefined): TopCategory => {
+  const def = categorizeByName(name);
+  return KEY_TO_TOP[def.key] ?? TOP_ACESSORIOS;
+};
+
 /** Aproxima o tamanho da fonte do rótulo pra caber sempre numa linha. */
 const labelFontSize = (label: string): number => {
   const len = label.length;

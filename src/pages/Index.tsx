@@ -6,6 +6,8 @@ import CategorySection from '@/components/CategorySection';
 import SEO from '@/components/SEO';
 import { Truck, Shield, HeadphonesIcon, CreditCard } from 'lucide-react';
 
+const SITE_URL = (import.meta.env.VITE_SITE_URL as string | undefined) || 'https://danielbikeshop.com';
+
 const features = [
   {
     icon: Truck,
@@ -32,7 +34,7 @@ const features = [
 const Index = () => {
   return (
     <div className="min-h-screen flex flex-col">
-      <SEO canonical="https://ride-sell.vercel.app/" />
+      <SEO canonical={`${SITE_URL}/`} />
       <Header />
       <main id="main-content" className="flex-1">
         <HeroSection />

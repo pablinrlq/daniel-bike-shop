@@ -119,6 +119,45 @@ supabase functions deploy service-notify
 > supabase secrets set WHATSAPP_SERVICE_TEMPLATE_LANG="pt_BR"
 > ```
 
+## Follow-up proativo de vendas (`whatsapp-followup`)
+
+A IA reengaja sozinha clientes que vieram do site, demonstraram interesse e não
+fecharam — manda uma mensagem com jeito de vendedor, insistindo (com educação)
+na compra. Liga/desliga na aba **Atendente IA**.
+
+> ⚠️ **Regra da Meta:** mensagem livre só é permitida **dentro de 24h** desde a
+> última mensagem do cliente. Por isso o follow-up só dispara nesse período,
+> no **máximo 2 vezes** por cliente e espaçado. Fora de 24h exigiria template
+> aprovado (não coberto aqui).
+
+```bash
+supabase functions deploy whatsapp-followup
+supabase secrets set FOLLOWUP_SECRET="um_segredo_qualquer"   # protege o endpoint
+```
+
+Agende a execução (a cada 30 min) com pg_cron + pg_net no **SQL Editor** do
+Supabase (troque `SEU_PROJECT_REF` e o segredo):
+
+```sql
+create extension if not exists pg_cron;
+create extension if not exists pg_net;
+
+select cron.schedule(
+  'whatsapp-followup',
+  '*/30 * * * *',
+  $$
+  select net.http_post(
+    url     := 'https://SEU_PROJECT_REF.supabase.co/functions/v1/whatsapp-followup',
+    headers := jsonb_build_object('Content-Type','application/json','x-followup-secret','um_segredo_qualquer'),
+    body    := '{}'::jsonb
+  );
+  $$
+);
+```
+
+Parâmetros (no topo de `whatsapp-followup/index.ts`): máx. 2 follow-ups,
+espera 2h de silêncio, janela de 23h, 6h entre cutucadas.
+
 ## Treinar o atendente (admin → Atendente IA)
 
 No admin, a aba **Atendente IA** liga/desliga o bot e gerencia a **FAQ** — o que

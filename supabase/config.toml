@@ -49,3 +49,13 @@ verify_jwt = false
 # A própria função revalida o papel admin/editor.
 [functions.service-notify]
 verify_jwt = true
+
+# Follow-up proativo de vendas — chamado por agendamento (pg_cron), sem JWT.
+# Protegido por FOLLOWUP_SECRET (header x-followup-secret).
+[functions.whatsapp-followup]
+verify_jwt = false
+
+# "Avise-me quando chegar" — disparo agendado (pg_cron), sem JWT.
+# Protegido por FOLLOWUP_SECRET (header x-followup-secret).
+[functions.stock-alert-notify]
+verify_jwt = false

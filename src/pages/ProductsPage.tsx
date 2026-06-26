@@ -3,12 +3,15 @@ import { useState, useMemo } from 'react';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import ProductCard from '@/components/ProductCard';
-import { useProducts, useCategories } from '@/hooks/useProducts';
+import { useProducts } from '@/hooks/useProducts';
+import { TOP_CATEGORIES } from '@/lib/productFallback';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Loader2 } from 'lucide-react';
 import SEO from '@/components/SEO';
+
+const SITE_URL = (import.meta.env.VITE_SITE_URL as string | undefined) || 'https://danielbikeshop.com';
 
 const ProductsPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -17,7 +20,6 @@ const ProductsPage = () => {
   const [sortBy, setSortBy] = useState('featured');
 
   const { data: products, isLoading: productsLoading } = useProducts();
-  const { data: categories, isLoading: categoriesLoading } = useCategories();
 
   const filteredProducts = useMemo(() => {
     if (!products) return [];
@@ -49,15 +51,30 @@ const ProductsPage = () => {
     }
   }, [products, categoryParam, searchQuery, sortBy]);
 
+  // Filtro derivado dos PRODUTOS presentes (categoria inferida pelo nome) — só
+  // mostra categorias que têm produto, então nenhum botão leva pra lista vazia.
   const categoryOptions = useMemo(() => {
     const options = [{ value: 'todos', label: 'Todos' }];
-    if (categories) {
-      categories.forEach(cat => {
-        options.push({ value: cat.slug, label: cat.name });
-      });
+    if (!products) return options;
+    const present = new Map<string, string>();
+    for (const p of products) {
+      if (p.categorySlug && !present.has(p.categorySlug)) {
+        present.set(p.categorySlug, p.category);
+      }
+    }
+    // categorias de topo conhecidas primeiro, na ordem oficial
+    for (const c of TOP_CATEGORIES) {
+      if (present.has(c.slug)) {
+        options.push({ value: c.slug, label: c.label });
+        present.delete(c.slug);
+      }
+    }
+    // qualquer outra categoria presente (ex.: definida manualmente no banco)
+    for (const [slug, label] of present) {
+      options.push({ value: slug, label });
     }
     return options;
-  }, [categories]);
+  }, [products]);
 
   const handleCategoryChange = (category: string) => {
     if (category === 'todos') {
@@ -68,7 +85,7 @@ const ProductsPage = () => {
     setSearchParams(searchParams);
   };
 
-  const isLoading = productsLoading || categoriesLoading;
+  const isLoading = productsLoading;
 
   const pageTitle = categoryParam !== 'todos'
     ? `${categoryOptions.find((c) => c.value === categoryParam)?.label || 'Produtos'}`
@@ -79,7 +96,7 @@ const ProductsPage = () => {
       <SEO
         title={pageTitle}
         description="Catálogo completo de bicicletas, peças e acessórios. Filtros por categoria e ordenação por preço."
-        canonical={`https://ride-sell.vercel.app/produtos${categoryParam !== 'todos' ? `?categoria=${categoryParam}` : ''}`}
+        canonical={`${SITE_URL}/produtos${categoryParam !== 'todos' ? `?categoria=${categoryParam}` : ''}`}
       />
       <Header />
       <main id="main-content" className="flex-1 py-8">
