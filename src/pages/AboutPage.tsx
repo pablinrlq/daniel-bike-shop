@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import { useStoreSettings } from '@/hooks/useStoreSettings';
@@ -50,6 +50,31 @@ const GalleryTile = ({ src, caption }: { src: string; caption: string }) => {
 const AboutPage = () => {
   const { data: settings, isLoading } = useStoreSettings();
   const storeName = settings?.store_name || 'Daniel Bike Shop';
+
+  // Só mostra na galeria as fotos que REALMENTE existem em public/sobre/.
+  // Sem foto, a seção inteira some (nada de "FOTO EM BREVE").
+  const [availablePhotos, setAvailablePhotos] = useState<typeof STORE_PHOTOS>([]);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all(
+      STORE_PHOTOS.map(
+        (p) =>
+          new Promise<(typeof STORE_PHOTOS)[number] | null>((resolve) => {
+            const img = new Image();
+            img.onload = () => resolve(p);
+            img.onerror = () => resolve(null);
+            img.src = p.src;
+          }),
+      ),
+    ).then((res) => {
+      if (!cancelled) {
+        setAvailablePhotos(res.filter((p): p is (typeof STORE_PHOTOS)[number] => p !== null));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -107,23 +132,25 @@ const AboutPage = () => {
           </div>
         </section>
 
-        {/* Galeria da loja */}
-        <section className="py-16 bg-card">
-          <div className="container mx-auto px-4">
-            <div className="text-center mb-12">
-              <span className="text-sm text-muted-foreground uppercase tracking-wider">Galeria</span>
-              <h2 className="text-3xl md:text-4xl font-bold mt-2">Conheça nosso espaço</h2>
-              <p className="text-muted-foreground mt-3 max-w-xl mx-auto">
-                Um pedacinho da loja, da oficina e da nossa equipe.
-              </p>
+        {/* Galeria da loja — só aparece quando há fotos reais em public/sobre/ */}
+        {availablePhotos.length > 0 && (
+          <section className="py-16 bg-card">
+            <div className="container mx-auto px-4">
+              <div className="text-center mb-12">
+                <span className="text-sm text-muted-foreground uppercase tracking-wider">Galeria</span>
+                <h2 className="text-3xl md:text-4xl font-bold mt-2">Conheça nosso espaço</h2>
+                <p className="text-muted-foreground mt-3 max-w-xl mx-auto">
+                  Um pedacinho da loja, da oficina e da nossa equipe.
+                </p>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-5 max-w-5xl mx-auto">
+                {availablePhotos.map((photo) => (
+                  <GalleryTile key={photo.src} src={photo.src} caption={photo.caption} />
+                ))}
+              </div>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-5 max-w-5xl mx-auto">
-              {STORE_PHOTOS.map((photo) => (
-                <GalleryTile key={photo.src} src={photo.src} caption={photo.caption} />
-              ))}
-            </div>
-          </div>
-        </section>
+          </section>
+        )}
 
         {/* História */}
         <section className="py-16">
