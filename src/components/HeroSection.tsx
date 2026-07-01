@@ -84,47 +84,59 @@ const HeroSection = () => {
     },
   });
 
-  // Banners fixos: as fotos que o lojista coloca em public/banner/ (1.jpg, 2.jpg,
-  // 3.jpg). Só entram as que realmente carregam — nunca mostra imagem quebrada.
-  const STATIC_BANNERS: Banner[] = [
+  // Banners fixos: fotos que o lojista coloca em public/banner/ (1, 2, 3).
+  // Aceita .jpg, .jpeg, .png ou .webp — pega a primeira que existir. Só entra
+  // o que realmente carrega (nunca mostra imagem quebrada).
+  const STATIC_BANNER_DEFS = [
     {
-      id: 'banner-1',
+      base: '1',
       title: 'Sua trilha começa aqui',
       subtitle: 'Mountain bikes Oggi e Rava prontas pra encarar qualquer terreno.',
-      image_url: '/banner/1.jpg',
       link_url: '/produtos?categoria=bicicletas',
     },
     {
-      id: 'banner-2',
+      base: '2',
       title: 'Pedale com a gente',
       subtitle: 'Bikes, peças e acessórios com quem entende e pedala.',
-      image_url: '/banner/2.jpg',
       link_url: '/produtos',
     },
     {
-      id: 'banner-3',
+      base: '3',
       title: 'Performance de verdade',
       subtitle: 'Equipamento de ponta pro seu próximo desafio.',
-      image_url: '/banner/3.jpg',
       link_url: '/produtos?categoria=bicicletas',
     },
   ];
   const [validStatic, setValidStatic] = useState<Banner[]>([]);
   useEffect(() => {
     let cancelled = false;
-    Promise.all(
-      STATIC_BANNERS.map(
-        (b) =>
-          new Promise<Banner | null>((resolve) => {
-            const img = new Image();
-            img.onload = () => resolve(b);
-            img.onerror = () => resolve(null);
-            img.src = b.image_url;
-          }),
-      ),
-    ).then((res) => {
-      if (!cancelled) setValidStatic(res.filter((b): b is Banner => b !== null));
-    });
+    const exts = ['jpg', 'jpeg', 'png', 'webp', 'JPG', 'JPEG'];
+    const tryLoad = (url: string) =>
+      new Promise<boolean>((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(true);
+        img.onerror = () => resolve(false);
+        img.src = url;
+      });
+    (async () => {
+      const found: Banner[] = [];
+      for (const def of STATIC_BANNER_DEFS) {
+        for (const ext of exts) {
+          const url = `/banner/${def.base}.${ext}`;
+          if (await tryLoad(url)) {
+            found.push({
+              id: `banner-${def.base}`,
+              title: def.title,
+              subtitle: def.subtitle,
+              image_url: url,
+              link_url: def.link_url,
+            });
+            break;
+          }
+        }
+      }
+      if (!cancelled) setValidStatic(found);
+    })();
     return () => {
       cancelled = true;
     };

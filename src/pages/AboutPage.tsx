@@ -9,17 +9,50 @@ import heroBike from '@/assets/hero-bike.jpg';
 
 const SITE_URL = (import.meta.env.VITE_SITE_URL as string | undefined) || 'https://danielbikeshop.com';
 
-// Fotos da loja. Coloque os arquivos em public/sobre/ com estes nomes
-// (ex.: public/sobre/loja-1.jpg). Enquanto não existirem, aparece uma
-// "plaquinha" elegante no lugar — o layout nunca quebra.
-const STORE_PHOTOS = [
-  { src: '/sobre/loja-1.jpg', caption: 'Nossa loja' },
-  { src: '/sobre/loja-2.jpg', caption: 'Showroom de bikes' },
-  { src: '/sobre/loja-3.jpg', caption: 'Oficina' },
-  { src: '/sobre/loja-4.jpg', caption: 'Acessórios' },
-  { src: '/sobre/loja-5.jpg', caption: 'Atendimento' },
-  { src: '/sobre/loja-6.jpg', caption: 'Equipe' },
+// Galeria "Conheça nosso espaço".
+//  1) Se você colocar fotos da loja em public/sobre/ (loja-1 ... loja-6), elas
+//     aparecem aqui. Aceita .jpg, .jpeg, .png ou .webp — pega a 1ª que existir.
+//  2) Se não houver fotos da loja, usamos as 3 fotos do banner (public/banner/
+//     1, 2, 3) — assim as fotos que você já subiu aparecem aqui também.
+//  3) Sem nenhuma foto, a seção inteira some (nunca mostra "FOTO EM BREVE").
+type PhotoDef = { base: string; caption: string };
+const STORE_PHOTO_DEFS: PhotoDef[] = [
+  { base: '/sobre/loja-1', caption: 'Nossa loja' },
+  { base: '/sobre/loja-2', caption: 'Showroom de bikes' },
+  { base: '/sobre/loja-3', caption: 'Oficina' },
+  { base: '/sobre/loja-4', caption: 'Acessórios' },
+  { base: '/sobre/loja-5', caption: 'Atendimento' },
+  { base: '/sobre/loja-6', caption: 'Equipe' },
 ];
+const BANNER_PHOTO_DEFS: PhotoDef[] = [
+  { base: '/banner/1', caption: 'Pedale com a gente' },
+  { base: '/banner/2', caption: 'Nossa paixão é bike' },
+  { base: '/banner/3', caption: 'Performance de verdade' },
+];
+const IMG_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'JPG', 'JPEG'];
+
+type Photo = { src: string; caption: string };
+
+const resolvePhotos = async (defs: PhotoDef[]): Promise<Photo[]> => {
+  const tryLoad = (url: string) =>
+    new Promise<boolean>((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(true);
+      img.onerror = () => resolve(false);
+      img.src = url;
+    });
+  const out: Photo[] = [];
+  for (const def of defs) {
+    for (const ext of IMG_EXTS) {
+      const url = `${def.base}.${ext}`;
+      if (await tryLoad(url)) {
+        out.push({ src: url, caption: def.caption });
+        break;
+      }
+    }
+  }
+  return out;
+};
 
 const GalleryTile = ({ src, caption }: { src: string; caption: string }) => {
   const [failed, setFailed] = useState(false);
@@ -51,26 +84,18 @@ const AboutPage = () => {
   const { data: settings, isLoading } = useStoreSettings();
   const storeName = settings?.store_name || 'Daniel Bike Shop';
 
-  // Só mostra na galeria as fotos que REALMENTE existem em public/sobre/.
-  // Sem foto, a seção inteira some (nada de "FOTO EM BREVE").
-  const [availablePhotos, setAvailablePhotos] = useState<typeof STORE_PHOTOS>([]);
+  // Só mostra na galeria as fotos que REALMENTE existem (loja primeiro; se não
+  // houver, as 3 do banner). Sem foto, a seção some (nada de "FOTO EM BREVE").
+  const [availablePhotos, setAvailablePhotos] = useState<Photo[]>([]);
   useEffect(() => {
     let cancelled = false;
-    Promise.all(
-      STORE_PHOTOS.map(
-        (p) =>
-          new Promise<(typeof STORE_PHOTOS)[number] | null>((resolve) => {
-            const img = new Image();
-            img.onload = () => resolve(p);
-            img.onerror = () => resolve(null);
-            img.src = p.src;
-          }),
-      ),
-    ).then((res) => {
-      if (!cancelled) {
-        setAvailablePhotos(res.filter((p): p is (typeof STORE_PHOTOS)[number] => p !== null));
+    (async () => {
+      let photos = await resolvePhotos(STORE_PHOTO_DEFS);
+      if (photos.length === 0) {
+        photos = await resolvePhotos(BANNER_PHOTO_DEFS);
       }
-    });
+      if (!cancelled) setAvailablePhotos(photos);
+    })();
     return () => {
       cancelled = true;
     };

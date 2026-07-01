@@ -94,7 +94,7 @@ export const buildProductMessage = (product: ProductLite, contact: UserContact):
 export const buildLeadMessage = (product: ProductLite, lead: LeadData): string => {
   const url = buildOriginUrl(`/produto/${product.slug || product.id}`);
   const lines = [
-    'Olá! Tenho interesse neste produto:',
+    'Olá! Quero *financiar* este produto:',
     '',
     `*Produto:* ${product.name}`,
     `*Preço:* ${formatPrice(product.price)}`,

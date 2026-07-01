@@ -18,10 +18,10 @@ import Anthropic from 'npm:@anthropic-ai/sdk';
 // ---- Config ----
 const GRAPH_VERSION = 'v21.0';
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
-// Modelo: padrão Opus 4.8 (mais capaz). Para WhatsApp, velocidade importa —
-// troque por "claude-haiku-4-5" (mais rápido/barato) ou "claude-sonnet-4-6"
-// (equilíbrio) só mudando o secret CLAUDE_MODEL. Ver README.
-const CLAUDE_MODEL = Deno.env.get('CLAUDE_MODEL') || 'claude-opus-4-8';
+// Modelo: padrão Haiku 4.5 — rápido e barato, ideal pra atendimento no WhatsApp.
+// Para respostas ainda mais espertas, troque por "claude-sonnet-4-6" (equilíbrio)
+// ou "claude-opus-4-8" (mais capaz) só mudando o secret CLAUDE_MODEL. Ver README.
+const CLAUDE_MODEL = Deno.env.get('CLAUDE_MODEL') || 'claude-haiku-4-5';
 const SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') || 'https://danielbikeshop.com').replace(/\/$/, '');
 const HISTORY_LIMIT = 20; // mensagens de contexto por conversa
 const MAX_TOOL_STEPS = 5; // trava de segurança no loop de ferramentas
@@ -35,13 +35,17 @@ Frete: calculado no checkout do site. Política atual: frete grátis acima de R$
 Retirada: dá para combinar retirada na loja em Belo Horizonte/MG.
 Site da loja: ${SITE_URL}`;
 
-const SYSTEM_PROMPT = `Você é o atendente virtual da Daniel Bike Shop, uma loja de bicicletas, peças, acessórios e oficina (serviços) em Belo Horizonte/MG. Você atende os clientes pelo WhatsApp como um vendedor de verdade.
+const SYSTEM_PROMPT = `Você é o Daniel, atendente e vendedor da Daniel Bike Shop, uma loja de bicicletas, peças, acessórios e oficina (serviços) em Belo Horizonte/MG. Você atende os clientes pelo WhatsApp.
 
 PERSONALIDADE E TOM
-- Fale como um vendedor brasileiro experiente, simpático e gente boa: natural, caloroso e direto. Trate o cliente por "você".
-- Mensagem de WhatsApp é curta — nada de textão. Frases curtas. Faça UMA pergunta por vez.
-- NÃO use emojis. Use *negrito* com moderação, só para nome de produto ou preço.
-- Cumprimente no primeiro contato e demonstre que quer ajudar de verdade.
+- Você é o Daniel: simpático e acolhedor, mas profissional e objetivo. Trate o cliente por "você".
+- Mensagem de WhatsApp é curta — nada de textão. Vá direto ao ponto, frases curtas. Faça UMA pergunta por vez.
+- Use emojis com muita moderação (no máximo um por mensagem, e nem sempre). Use *negrito* só para nome de produto ou preço.
+- Se perguntarem seu nome, você é o Daniel.
+
+PRIMEIRO CONTATO
+- Uma mensagem de boas-vindas automática (sua apresentação + link do site + endereço/horário + opção de falar com um vendedor) JÁ FOI enviada ao cliente. NÃO repita essa saudação nem essas informações.
+- Se a primeira mensagem do cliente for só um "oi" ou "quero informações", responda em uma linha perguntando, de forma simpática, o que ele procura. Se ele já disse o que quer, vá direto ajudar.
 
 COMO ATENDER (igual a um bom vendedor)
 - Entenda a necessidade antes de empurrar produto: pergunte o uso (cidade, trilha, estrada, trabalho), a faixa de preço e, para bikes, a altura/tamanho de quadro se fizer sentido.
@@ -272,20 +276,39 @@ async function handleMessage(
 
     await markRead(msg.waId); // confirma leitura (sensação de atendimento ágil)
 
+    // Primeiro contato: manda UMA mensagem de boas-vindas organizada (apresentação,
+    // site, endereço/horário e opção de falar com um humano). Só uma vez por conversa.
+    const firstContact = !(await hasAssistantReplied(supabase, convo.id));
+    if (firstContact) {
+      const welcome = await buildWelcome(supabase);
+      await sendText(msg.from, welcome);
+      await saveMessage(supabase, convo.id, 'assistant', welcome, null);
+    }
+
     // Só processamos texto por enquanto.
     if (msg.type !== 'text' || !msg.text) {
-      const fallback =
-        'Recebi sua mensagem. Por aqui consigo te ajudar melhor por texto. Pode me dizer o que você procura?';
-      await sendText(msg.from, fallback);
-      await saveMessage(supabase, convo.id, 'assistant', fallback, null);
+      if (!firstContact) {
+        const fallback =
+          'Recebi sua mensagem. Por aqui consigo te ajudar melhor por texto. Pode me dizer o que você procura?';
+        await sendText(msg.from, fallback);
+        await saveMessage(supabase, convo.id, 'assistant', fallback, null);
+      }
+      return;
+    }
+
+    // Se foi só um cumprimento no primeiro contato, a boas-vindas já basta.
+    if (firstContact && isJustGreeting(msg.text)) {
+      await touchConversation(supabase, convo.id);
       return;
     }
 
     const history = await loadHistory(supabase, convo.id);
     const reply = await runAI(anthropic, supabase, convo, history, system);
 
-    await sendText(msg.from, reply);
-    await saveMessage(supabase, convo.id, 'assistant', reply, null);
+    if (reply) {
+      await sendText(msg.from, reply);
+      await saveMessage(supabase, convo.id, 'assistant', reply, null);
+    }
     await touchConversation(supabase, convo.id);
   } catch (e) {
     console.error('handleMessage error:', e);
@@ -303,6 +326,9 @@ async function runAI(
   system: any[],
 ): Promise<string> {
   const messages: any[] = history.map((m) => ({ role: m.role, content: m.content }));
+  // A conversa precisa terminar num turno do cliente (nunca "prefill" do assistente).
+  while (messages.length && messages[messages.length - 1].role === 'assistant') messages.pop();
+  if (messages.length === 0) return '';
 
   for (let step = 0; step < MAX_TOOL_STEPS; step++) {
     const resp: any = await anthropic.messages.create({
@@ -565,6 +591,68 @@ async function touchConversation(supabase: SupabaseClient, conversationId: strin
     .from('whatsapp_conversations')
     .update({ last_message_at: new Date().toISOString() })
     .eq('id', conversationId);
+}
+
+// Já existe alguma resposta do atendente nesta conversa? (define o "primeiro contato")
+async function hasAssistantReplied(
+  supabase: SupabaseClient,
+  conversationId: string,
+): Promise<boolean> {
+  const { data } = await supabase
+    .from('whatsapp_messages')
+    .select('id')
+    .eq('conversation_id', conversationId)
+    .eq('role', 'assistant')
+    .limit(1);
+  return (data?.length ?? 0) > 0;
+}
+
+// Mensagem de boas-vindas do primeiro contato — UMA só, organizada e profissional.
+// Apresentação do Daniel + link do site + endereço/horário + opção de falar com humano.
+async function buildWelcome(supabase: SupabaseClient): Promise<string> {
+  const { data } = await supabase
+    .from('store_settings')
+    .select('store_name, address, city, state, working_hours')
+    .limit(1)
+    .maybeSingle();
+
+  const nome = data?.store_name || 'Daniel Bike Shop';
+  const endereco = [data?.address, data?.city, data?.state].filter(Boolean).join(', ');
+
+  const parts: string[] = [];
+  parts.push(`Olá! Seja bem-vindo à *${nome}* 🚴`);
+  parts.push(
+    'Aqui é o Daniel. Vou te ajudar a encontrar a bike, peça ou acessório certo e tirar suas dúvidas.',
+  );
+  parts.push(`Você pode ver tudo e comprar com segurança no nosso site:\n${SITE_URL}`);
+  if (endereco || data?.working_hours) {
+    const loja = ['*Nossa loja*'];
+    if (endereco) loja.push(`Endereço: ${endereco}`);
+    if (data?.working_hours) loja.push(`Horário: ${data.working_hours}`);
+    parts.push(loja.join('\n'));
+  }
+  parts.push('Me diga o que você procura. Se preferir falar com um vendedor, é só pedir.');
+  return parts.join('\n\n');
+}
+
+// Cumprimento "puro" no primeiro contato → a mensagem de boas-vindas já basta.
+function isJustGreeting(text: string): boolean {
+  const t = text
+    .toLowerCase()
+    .replace(/[!?.,;:]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (t.length <= 3) return true;
+  const greetings = new Set([
+    'oi', 'ola', 'olá', 'opa', 'eai', 'e ai', 'e aí',
+    'bom dia', 'boa tarde', 'boa noite',
+    'oi tudo bem', 'ola tudo bem', 'olá tudo bem', 'tudo bem',
+    'oi bom dia', 'oi boa tarde', 'oi boa noite',
+    'quero informacoes', 'quero informações', 'queria informacoes', 'queria informações',
+    'gostaria de informacoes', 'gostaria de informações',
+    'informacoes', 'informações', 'quero saber mais', 'menu', 'inicio', 'início',
+  ]);
+  return greetings.has(t);
 }
 
 // =====================================================================

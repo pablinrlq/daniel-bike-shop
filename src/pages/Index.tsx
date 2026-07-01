@@ -4,15 +4,15 @@ import HeroSection from '@/components/HeroSection';
 import FeaturedProducts from '@/components/FeaturedProducts';
 import CategorySection from '@/components/CategorySection';
 import SEO from '@/components/SEO';
-import { Truck, Shield, HeadphonesIcon, CreditCard } from 'lucide-react';
+import { MapPin, Shield, HeadphonesIcon, CreditCard } from 'lucide-react';
 
 const SITE_URL = (import.meta.env.VITE_SITE_URL as string | undefined) || 'https://danielbikeshop.com';
 
 const features = [
   {
-    icon: Truck,
-    title: 'Entrega Rápida',
-    description: 'Enviamos para todo o Brasil'
+    icon: CreditCard,
+    title: '21x sem juros',
+    description: 'Parcele sua bike no cartão'
   },
   {
     icon: Shield,
@@ -25,9 +25,9 @@ const features = [
     description: 'Atendimento especializado'
   },
   {
-    icon: CreditCard,
-    title: 'Parcelamento',
-    description: 'Em até 12x sem juros'
+    icon: MapPin,
+    title: 'Retire na loja',
+    description: 'Belo Horizonte/MG'
   }
 ];
 

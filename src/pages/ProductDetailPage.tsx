@@ -16,6 +16,7 @@ import ProductReviews from '@/components/ProductReviews';
 import ProductImage from '@/components/ProductImage';
 import SEO from '@/components/SEO';
 import BuyLeadDialog from '@/components/BuyLeadDialog';
+import { bestInstallment } from '@/lib/installments';
 
 const SITE_URL = (import.meta.env.VITE_SITE_URL as string | undefined) || 'https://danielbikeshop.com';
 
@@ -117,9 +118,11 @@ const ProductDetailPage = () => {
     ?.filter(p => p.categorySlug === product.categorySlug && p.id !== product.id)
     .slice(0, 3) || [];
 
-  const discount = product.originalPrice 
-    ? Math.round((1 - product.price / product.originalPrice) * 100) 
+  const discount = product.originalPrice
+    ? Math.round((1 - product.price / product.originalPrice) * 100)
     : 0;
+
+  const installment = bestInstallment(product.price);
 
   const images = product.images.length > 0 ? product.images : [product.image];
 
@@ -212,6 +215,11 @@ const ProductDetailPage = () => {
                   </span>
                 )}
               </div>
+              {installment && (
+                <p className="mt-2 text-sm text-muted-foreground">
+                  ou <span className="font-semibold text-foreground">{installment.label}</span>
+                </p>
+              )}
 
               <p className="text-muted-foreground mt-6 leading-relaxed">{product.description}</p>
 

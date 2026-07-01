@@ -11,6 +11,7 @@ import WishlistButton from '@/components/WishlistButton';
 import StockAlertButton from '@/components/StockAlertButton';
 import ProductImage from '@/components/ProductImage';
 import BuyLeadDialog from '@/components/BuyLeadDialog';
+import { bestInstallment } from '@/lib/installments';
 
 interface ProductCardProps {
   product: Product;
@@ -61,9 +62,11 @@ const ProductCard = ({ product }: ProductCardProps) => {
     }).format(price);
   };
 
-  const discount = product.originalPrice 
-    ? Math.round((1 - product.price / product.originalPrice) * 100) 
+  const discount = product.originalPrice
+    ? Math.round((1 - product.price / product.originalPrice) * 100)
     : 0;
+
+  const installment = bestInstallment(product.price);
 
   return (
     <div className="group bg-card border border-border rounded-lg overflow-hidden hover:border-primary/50 hover:shadow-lg transition-all duration-300 flex flex-col">
@@ -175,6 +178,9 @@ const ProductCard = ({ product }: ProductCardProps) => {
             </span>
           )}
         </div>
+        {installment && (
+          <span className="mt-1 text-xs text-muted-foreground">ou {installment.label}</span>
+        )}
 
         {isOutOfStock && (
           <StockAlertButton
