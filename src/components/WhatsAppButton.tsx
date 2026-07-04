@@ -1,12 +1,26 @@
 import { MessageCircle } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 import { useStoreSettings } from '@/hooks/useStoreSettings';
+import { buildWhatsappUrl, resolveWhatsappNumber } from '@/lib/whatsapp';
 import { cn } from '@/lib/utils';
 
+// Rotas onde o botão flutuante NÃO deve aparecer (admin e autenticação).
+const HIDDEN_ROUTES = ['/login', '/cadastro'];
+
 const WhatsAppButton = () => {
+  const { pathname } = useLocation();
   const { data: settings } = useStoreSettings();
-  
-  const whatsappNumber = settings?.whatsapp?.replace(/\D/g, '') || '5531995326386';
-  const whatsappUrl = `https://wa.me/${whatsappNumber}?text=Olá! Vim pelo site e gostaria de mais informações.`;
+
+  // Some no painel admin e nas telas de login/cadastro. O React Router casa
+  // rotas sem diferenciar maiúsculas e tolera barra final ('/Login/', '/ADMIN')
+  // — normaliza antes de comparar pra não vazar o botão nessas variantes.
+  const path = pathname.toLowerCase().replace(/\/+$/, '') || '/';
+  if (path.startsWith('/admin') || HIDDEN_ROUTES.includes(path)) {
+    return null;
+  }
+
+  const whatsappNumber = resolveWhatsappNumber(settings?.whatsapp);
+  const whatsappUrl = buildWhatsappUrl(whatsappNumber, 'Olá! Vim pelo site e quero uma ajuda.');
 
   return (
     <a
@@ -23,10 +37,10 @@ const WhatsAppButton = () => {
         "hover:scale-110 hover:shadow-xl",
         "animate-fade-in"
       )}
-      aria-label="Fale conosco pelo WhatsApp"
+      aria-label="Falar no WhatsApp"
     >
       <MessageCircle className="h-7 w-7" />
-      
+
       {/* Pulse animation */}
       <span className="absolute inset-0 rounded-full bg-[#25D366] animate-ping opacity-25" />
     </a>

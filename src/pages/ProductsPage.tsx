@@ -170,11 +170,19 @@ const ProductsPage = () => {
             </div>
           )}
 
-          {!isLoading && filteredProducts.length === 0 && (
-            <div className="text-center py-16">
-              <p className="text-muted-foreground">Nenhum produto encontrado nesta categoria.</p>
-            </div>
-          )}
+          {/* Live region sempre montada: leitores de tela só anunciam mudanças
+              de conteúdo em regiões que já existiam no DOM. */}
+          <div role="status" aria-live="polite">
+            {!isLoading && filteredProducts.length === 0 && (
+              <div className="text-center py-16">
+                <p className="text-muted-foreground">
+                  {searchQuery
+                    ? `Nenhum produto encontrado para "${searchQuery}".`
+                    : 'Nenhum produto encontrado nesta categoria.'}
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       </main>
       <Footer />

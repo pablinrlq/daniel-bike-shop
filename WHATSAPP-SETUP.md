@@ -6,6 +6,18 @@ de boas-vindas organizada no primeiro contato e chama um humano quando precisa.
 
 A função que faz isso é `supabase/functions/whatsapp-webhook`.
 
+**Novidades desta versão:**
+- 🟢 **Boas-vindas com botões interativos** — no primeiro contato o cliente
+  recebe botões clicáveis (em vez de só texto), o que facilita a conversa.
+- ⌨️ **Indicador "digitando..."** — enquanto o Daniel pensa na resposta, o
+  cliente vê "digitando..." no WhatsApp, como num atendimento de verdade.
+- 🔁 **Retry automático do 9º dígito** — se a Meta recusar o envio por causa do
+  formato do número brasileiro (com ou sem o 9), o código tenta o outro formato
+  sozinho.
+- ⚠️ **Mensagens não entregues ficam registradas** — se mesmo assim o envio
+  falhar, a mensagem aparece no histórico da conversa com o prefixo
+  `[NÃO ENTREGUE]`, pra você saber o que o cliente **não** recebeu.
+
 ---
 
 ## 1. Chaves que você precisa pegar
@@ -25,9 +37,9 @@ A função que faz isso é `supabase/functions/whatsapp-webhook`.
 3. Anote:
    - **Phone Number ID** (ID do número) → secret `WHATSAPP_PHONE_NUMBER_ID`
    - **Token de acesso** → secret `WHATSAPP_TOKEN`
-     - Para produção, gere um **token permanente** em *business.facebook.com →
-       Configurações do Negócio → Usuários → Usuários do sistema*, com as
-       permissões `whatsapp_business_messaging` e `whatsapp_business_management`.
+     - ⚠️ O token de teste que aparece no painel **dura só 24 horas**. Para
+       produção, gere um **token permanente** — passo a passo na seção
+       [7. Token permanente](#7-token-permanente-obrigatório-para-produção).
    - **App Secret** (em *Configurações → Básico*) → secret `WHATSAPP_APP_SECRET` (opcional, mas recomendado).
 4. Crie um **Verify Token** (uma senha qualquer que você inventa) → secret `WHATSAPP_VERIFY_TOKEN`.
 
@@ -41,7 +53,11 @@ As tabelas (`whatsapp_conversations`, `whatsapp_messages`, `faqs`,
 
 - **CLI (recomendado):** `supabase db push`
 - **Ou manual:** abra o Supabase → **SQL Editor** e rode, em ordem de data, o
-  conteúdo de cada arquivo em `supabase/migrations/2026061*` e `2026062*`.
+  conteúdo de cada arquivo em `supabase/migrations/` a partir de `20260616...`.
+
+> Rode o `supabase db push` de novo sempre que atualizar o projeto — esta versão
+> adiciona a coluna `delivery_phone` (usada pelo retry do 9º dígito pra memorizar
+> o formato de número que a Meta aceita entregar).
 
 ---
 
@@ -100,9 +116,88 @@ de responder ali (um atendente assume).
 
 ---
 
+## 7. Token permanente (obrigatório para produção)
+
+O token que a Meta mostra na tela de teste **expira em 24 horas**. Se você usar
+ele em produção, o Daniel vai parar de responder no dia seguinte. Faça o token
+permanente uma vez e esqueça:
+
+1. Entre em **business.facebook.com** → **Configurações do negócio**.
+2. No menu lateral, vá em **Usuários → Usuários do sistema** e clique em
+   **Adicionar**. Dê um nome (ex.: `daniel-bot`) e escolha a função **Admin**.
+3. Com o usuário criado, clique em **Adicionar ativos**, selecione o seu **App**
+   (o mesmo que tem o produto WhatsApp) e dê controle total.
+4. Clique em **Gerar novo token**, selecione o app e marque as permissões:
+   - `whatsapp_business_messaging`
+   - `whatsapp_business_management`
+
+   Em **Expiração do token**, escolha **Nunca**. Copie o token gerado
+   (ele só aparece uma vez!).
+5. Atualize o secret com o token novo:
+   ```bash
+   supabase secrets set WHATSAPP_TOKEN=SEU_TOKEN_PERMANENTE
+   ```
+6. Publique a função de novo pra ela pegar o secret atualizado:
+   ```bash
+   supabase functions deploy whatsapp-webhook --no-verify-jwt
+   ```
+
+---
+
+## 8. Checklist de teste ponta a ponta
+
+Siga na ordem — se travar em algum passo, veja a
+[Solução de problemas](#solução-de-problemas-leia-se-a-mensagem-não-chegar) logo abaixo.
+
+1. **Número cadastrado como destinatário** no painel da Meta (*WhatsApp →
+   Configuração da API → lista "Até"*), nas **duas** formas: com o 9
+   (`5531982100836`) **e** sem o 9 (`553182100836`).
+2. **Webhook verde**: em *WhatsApp → Configuration → Webhook*, o **Verify and
+   Save** passou sem erro.
+3. **Campo `messages` assinado** em *Webhook fields*.
+4. **Secrets setados** no Supabase (tabela da seção 3 — principalmente
+   `ANTHROPIC_API_KEY`, `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` e
+   `WHATSAPP_VERIFY_TOKEN`).
+5. **Deploy feito**: `supabase functions deploy whatsapp-webhook --no-verify-jwt`.
+6. Do seu celular, **mande "oi"** pro número do WhatsApp.
+7. **Espere a mensagem de boas-vindas com botões** (você deve ver o
+   "digitando..." antes dela chegar).
+8. **Clique em um dos botões** e confira se o Daniel responde de acordo.
+9. **Pergunte o preço de um produto real** do catálogo (ex.: "quanto custa a
+   bike X?") e confira se o valor bate com o site. ✅
+
+---
+
+## Solução de problemas (leia se a mensagem não chegar)
+
+Quando a Meta recusa um envio, ela devolve um **código de erro**. Os mais
+comuns:
+
+| Erro | Causa | Solução |
+|---|---|---|
+| **131030** | Seu número não está na lista de destinatários permitidos (enquanto o app está em **modo teste**, a Meta só entrega pra números cadastrados). Pegadinha do **9º dígito**: a Meta pode registrar seu número **sem o 9** (`553182100836`), e aí o envio pra versão com 9 falha. | O código já **tenta os dois formatos automaticamente** (com e sem o 9), mas o mais garantido é cadastrar o número nas **DUAS formas** na lista **"Até"** em *WhatsApp → Configuração da API* no painel da Meta. |
+| **131047** | **Janela de 24 h fechada.** O WhatsApp só deixa a empresa mandar mensagem livre até 24 h depois da última mensagem **do cliente**. | Peça pro cliente mandar qualquer mensagem primeiro (isso reabre a janela), ou use um **template aprovado** pela Meta pra iniciar a conversa. |
+| **190** | **Token expirado.** O token de teste da Meta dura só **24 horas**. | Gere um token permanente — seção [7. Token permanente](#7-token-permanente-obrigatório-para-produção) — e atualize o secret `WHATSAPP_TOKEN`. |
+
+**Como ver os logs da função** (é onde esses códigos de erro aparecem):
+
+```bash
+supabase functions logs whatsapp-webhook
+```
+
+Ou pelo painel: **Supabase → Edge Functions → whatsapp-webhook → Logs**.
+
+> 💡 Dica: quando um envio falha de vez (mesmo após o retry do 9º dígito), a
+> mensagem fica salva no histórico da conversa com o prefixo `[NÃO ENTREGUE]` —
+> abra a conversa no admin pra ver o que o cliente não recebeu.
+
+---
+
 ## Dúvidas comuns
 - **"Não respondeu"** → confira os *Logs* da função no Supabase e se os secrets
   estão setados. 90% das vezes é token da Meta ou `ANTHROPIC_API_KEY` faltando.
+  Se o log mostrar um código de erro da Meta (131030, 131047, 190...), veja a
+  seção [Solução de problemas](#solução-de-problemas-leia-se-a-mensagem-não-chegar).
 - **"Respondeu mas sem preço certo"** → rode a sync do Bling (`/admin/bling →
   Forçar sync completa`) pra encher o catálogo no banco.
 - **Trocar o tom/mensagens** → o jeitão do Daniel está no `SYSTEM_PROMPT` e a

@@ -11,9 +11,9 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import Anthropic from 'npm:@anthropic-ai/sdk';
+// Envio via Meta Cloud API com retry do "9º dígito" BR e log estruturado de erro.
+import { sendText, logGraphError } from '../_shared/whatsapp.ts';
 
-const GRAPH_VERSION = 'v21.0';
-const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
 const CLAUDE_MODEL = Deno.env.get('CLAUDE_MODEL') || 'claude-opus-4-8';
 
 // Parâmetros do follow-up (ajustáveis)
@@ -38,6 +38,8 @@ Responda SOMENTE com a mensagem para o cliente.`;
 interface Convo {
   id: string;
   phone: string;
+  // Formato que a Meta aceitou entregar (9º dígito) — preferido no envio.
+  delivery_phone?: string | null;
   customer_name: string | null;
   last_message_at: string;
   follow_up_count: number;
@@ -88,7 +90,9 @@ serve(async (req) => {
     // ainda não receberam o máximo de follow-ups.
     const { data: candidates, error } = await supabase
       .from('whatsapp_conversations')
-      .select('id, phone, customer_name, last_message_at, follow_up_count, last_follow_up_at')
+      // select('*') de propósito: delivery_phone pode ainda não existir no banco
+      // (migration pendente) e listar a coluna explicitamente quebraria a query.
+      .select('*')
       .eq('status', 'bot')
       .eq('closed', false)
       .lt('follow_up_count', MAX_FOLLOWUPS)
@@ -153,8 +157,12 @@ serve(async (req) => {
           continue;
         }
 
-        const ok = await sendText(TOKEN, PHONE_ID, convo.phone, text);
-        if (!ok) {
+        // Prefere o formato que a Meta já aceitou entregar (9º dígito).
+        const result = await sendText(convo.delivery_phone || convo.phone, text, {
+          previewUrl: false,
+        });
+        if (!result.ok) {
+          logGraphError('whatsapp-followup', result);
           // Provável janela de 24h fechada — encerra pra não tentar de novo.
           await supabase.from('whatsapp_conversations').update({ closed: true }).eq('id', convo.id);
           skipped++;
@@ -187,19 +195,6 @@ serve(async (req) => {
     return json({ error: 'server_error', message: e instanceof Error ? e.message : 'erro' }, 500);
   }
 });
-
-async function sendText(token: string, phoneId: string, to: string, body: string): Promise<boolean> {
-  const resp = await fetch(`${GRAPH_BASE}/${phoneId}/messages`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messaging_product: 'whatsapp', to, type: 'text', text: { body } }),
-  });
-  if (!resp.ok) {
-    console.error('follow-up send failed:', resp.status, await resp.text());
-    return false;
-  }
-  return true;
-}
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {

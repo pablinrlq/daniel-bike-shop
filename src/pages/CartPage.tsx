@@ -9,6 +9,7 @@ import { Trash2, Plus, Minus, ShoppingBag, ArrowRight, MessageCircle } from 'luc
 import CouponInput from '@/components/CouponInput';
 import ProductImage from '@/components/ProductImage';
 import { calculateShipping, hasEarnedFreeShipping } from '@/lib/shipping';
+import { bestInstallment } from '@/lib/installments';
 import {
   buildCartMessage,
   buildWhatsappUrl,
@@ -36,12 +37,14 @@ const CartPage = () => {
 
   const shippingCost = calculateShipping(total);
   const orderTotal = total - discount + shippingCost;
+  // Parcelamento sem juros sobre o total do pedido (null quando não compensa).
+  const installment = bestInstallment(orderTotal);
 
   if (items.length === 0) {
     return (
       <div className="min-h-screen flex flex-col">
         <Header />
-        <main className="flex-1 flex items-center justify-center py-16">
+        <main id="main-content" className="flex-1 flex items-center justify-center py-16">
           <div className="text-center">
             <ShoppingBag className="h-16 w-16 mx-auto text-muted-foreground mb-4" />
             <h1 className="text-2xl font-bold mb-2">Seu carrinho está vazio</h1>
@@ -62,7 +65,7 @@ const CartPage = () => {
   return (
     <div className="min-h-screen flex flex-col">
       <Header />
-      <main className="flex-1 py-8">
+      <main id="main-content" className="flex-1 py-8">
         <div className="container mx-auto px-4">
           <h1 className="text-3xl font-bold mb-8">Carrinho de Compras</h1>
 
@@ -158,6 +161,11 @@ const CartPage = () => {
                       <span>Total</span>
                       <span>{formatPrice(orderTotal)}</span>
                     </div>
+                    {installment && (
+                      <p className="text-xs text-muted-foreground mt-1 text-right">
+                        ou {installment.label}
+                      </p>
+                    )}
                     {hasEarnedFreeShipping(total) && (
                       <p className="text-xs text-primary mt-1">Você ganhou frete grátis!</p>
                     )}

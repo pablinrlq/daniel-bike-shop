@@ -9,16 +9,13 @@
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
+// Envio via Meta Cloud API com retry do "9º dígito" BR e log estruturado de erro.
+import { sendMessage, sendText, onlyDigits, logGraphError } from '../_shared/whatsapp.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
-
-const GRAPH_VERSION = 'v21.0';
-const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
-
-const onlyDigits = (s: string | null | undefined) => (s ?? '').replace(/\D+/g, '');
 
 // Garante DDI 55 (Brasil) quando vier só DDD + número.
 const normalizePhone = (raw: string) => {
@@ -97,10 +94,9 @@ serve(async (req) => {
     const template = Deno.env.get('WHATSAPP_SERVICE_TEMPLATE'); // nome do template aprovado (opcional)
     const templateLang = Deno.env.get('WHATSAPP_SERVICE_TEMPLATE_LANG') || 'pt_BR';
 
-    const payload = template
-      ? {
-          messaging_product: 'whatsapp',
-          to,
+    // Envio via módulo compartilhado: retry automático do 9º dígito BR (131030).
+    const result = template
+      ? await sendMessage(to, {
           type: 'template',
           template: {
             name: template,
@@ -116,30 +112,19 @@ serve(async (req) => {
               },
             ],
           },
-        }
-      : {
-          messaging_product: 'whatsapp',
-          to,
-          type: 'text',
-          text: { body: fullText },
-        };
+        })
+      : await sendText(to, fullText, { previewUrl: false });
 
-    const resp = await fetch(`${GRAPH_BASE}/${PHONE_ID}/messages`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    if (!resp.ok) {
-      const errText = await resp.text();
-      console.error('WhatsApp send failed:', resp.status, errText);
+    if (!result.ok) {
+      logGraphError('service-notify', result);
       // 131047 / janela de 24h: cliente precisa ter falado recentemente OU usar template.
       return json(
         {
           success: false,
           message:
             'Falha ao enviar no WhatsApp. Para avisos fora da janela de 24h, configure um template aprovado (WHATSAPP_SERVICE_TEMPLATE).',
-          detail: errText,
+          errorCode: result.errorCode,
+          detail: result.errorMessage,
         },
         502,
       );

@@ -8,11 +8,10 @@
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
+// Envio via Meta Cloud API com retry do "9º dígito" BR e log estruturado de erro.
+import { sendMessage, sendText, onlyDigits, logGraphError } from '../_shared/whatsapp.ts';
 
-const GRAPH_VERSION = 'v21.0';
-const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
 const SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') || 'https://danielbikeshop.com').replace(/\/$/, '');
-const onlyDigits = (s: string | null | undefined) => (s ?? '').replace(/\D+/g, '');
 const normalizePhone = (raw: string) => {
   const d = onlyDigits(raw);
   return d.length <= 11 ? `55${d}` : d;
@@ -66,10 +65,9 @@ serve(async (req) => {
           `Boa notícia, ${firstName}! O produto que você queria voltou ao estoque na Daniel Bike Shop:\n\n` +
           `*${a.product_name}*\n${link}\n\nQuer que eu já reserve o seu?`;
 
-        const payload = template
-          ? {
-              messaging_product: 'whatsapp',
-              to,
+        // Envio via módulo compartilhado: retry automático do 9º dígito BR (131030).
+        const result = template
+          ? await sendMessage(to, {
               type: 'template',
               template: {
                 name: template,
@@ -84,16 +82,10 @@ serve(async (req) => {
                   },
                 ],
               },
-            }
-          : { messaging_product: 'whatsapp', to, type: 'text', text: { body: textBody, preview_url: true } };
-
-        const resp = await fetch(`${GRAPH_BASE}/${PHONE_ID}/messages`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        if (!resp.ok) {
-          console.error('stock-alert send failed:', resp.status, await resp.text());
+            })
+          : await sendText(to, textBody, { previewUrl: true });
+        if (!result.ok) {
+          logGraphError('stock-alert-notify', result);
           skipped++;
           continue;
         }

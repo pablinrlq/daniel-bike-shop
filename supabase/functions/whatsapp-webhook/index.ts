@@ -14,10 +14,16 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import Anthropic from 'npm:@anthropic-ai/sdk';
+// Envio via Meta Cloud API com retry do "9º dígito" BR e log estruturado de erro.
+import {
+  sendText,
+  sendMessage,
+  markReadWithTyping,
+  logGraphError,
+  type SendResult,
+} from '../_shared/whatsapp.ts';
 
 // ---- Config ----
-const GRAPH_VERSION = 'v21.0';
-const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
 // Modelo: padrão Haiku 4.5 — rápido e barato, ideal pra atendimento no WhatsApp.
 // Para respostas ainda mais espertas, troque por "claude-sonnet-4-6" (equilíbrio)
 // ou "claude-opus-4-8" (mais capaz) só mudando o secret CLAUDE_MODEL. Ver README.
@@ -253,6 +259,7 @@ interface IncomingMessage {
   name?: string;
   type: string;
   text: string;
+  buttonId: string | null; // id do botão clicado (interactive.button_reply.id)
 }
 
 async function handleMessage(
@@ -274,15 +281,21 @@ async function handleMessage(
     // IA desligada globalmente, ou um humano já assumiu esta conversa → não responde.
     if (!aiEnabled || convo.status === 'human') return;
 
-    await markRead(msg.waId); // confirma leitura (sensação de atendimento ágil)
+    // Confirma leitura E liga o "digitando..." (atendimento com cara humana).
+    await markReadWithTyping(msg.waId);
+
+    // Clique nos botões da boas-vindas: resposta determinística, instantânea e
+    // grátis — NÃO passa pela IA.
+    if (msg.buttonId && (await handleButtonClick(supabase, convo, msg))) {
+      await touchConversation(supabase, convo.id);
+      return;
+    }
 
     // Primeiro contato: manda UMA mensagem de boas-vindas organizada (apresentação,
-    // site, endereço/horário e opção de falar com um humano). Só uma vez por conversa.
+    // site, endereço/horário) com botões de ação rápida. Só uma vez por conversa.
     const firstContact = !(await hasAssistantReplied(supabase, convo.id));
     if (firstContact) {
-      const welcome = await buildWelcome(supabase);
-      await sendText(msg.from, welcome);
-      await saveMessage(supabase, convo.id, 'assistant', welcome, null);
+      await sendWelcome(supabase, convo, msg.from);
     }
 
     // Só processamos texto por enquanto.
@@ -290,8 +303,7 @@ async function handleMessage(
       if (!firstContact) {
         const fallback =
           'Recebi sua mensagem. Por aqui consigo te ajudar melhor por texto. Pode me dizer o que você procura?';
-        await sendText(msg.from, fallback);
-        await saveMessage(supabase, convo.id, 'assistant', fallback, null);
+        await deliver(supabase, convo, msg.from, fallback);
       }
       return;
     }
@@ -306,12 +318,143 @@ async function handleMessage(
     const reply = await runAI(anthropic, supabase, convo, history, system);
 
     if (reply) {
-      await sendText(msg.from, reply);
-      await saveMessage(supabase, convo.id, 'assistant', reply, null);
+      await deliver(supabase, convo, msg.from, reply);
     }
     await touchConversation(supabase, convo.id);
   } catch (e) {
     console.error('handleMessage error:', e);
+  }
+}
+
+// =====================================================================
+// Entrega de respostas (IA ou determinísticas)
+// =====================================================================
+
+// Conversa com o mínimo que a entrega precisa. `phone` é o wa_id de ENTRADA
+// (chave de lookup — NUNCA sobrescrever); `delivery_phone` é o formato que a
+// Meta aceitou entregar (com/sem o 9º dígito), preenchido pelo retry.
+type DeliverConvo = { id: string; phone: string; delivery_phone?: string | null };
+
+// Envia texto ao cliente (com retry do 9º dígito) e registra na conversa.
+// - Falhou? Loga o erro estruturado e salva mesmo assim com o prefixo
+//   '[NAO ENTREGUE] ' — assim o admin vê no painel que o cliente não recebeu.
+async function deliver(
+  supabase: SupabaseClient,
+  convo: DeliverConvo,
+  to: string,
+  text: string,
+): Promise<SendResult> {
+  // Se já sabemos o formato entregável, vai direto nele (evita 1 chamada perdida).
+  const dest = convo.delivery_phone || to;
+  const result = await sendText(dest, text);
+  await recordDelivery(supabase, convo, text, result);
+  return result;
+}
+
+// Registro comum pós-envio (usado pelo deliver e pela boas-vindas interativa).
+async function recordDelivery(
+  supabase: SupabaseClient,
+  convo: DeliverConvo,
+  text: string,
+  result: SendResult,
+) {
+  if (!result.ok) {
+    logGraphError('whatsapp-webhook', result);
+  } else if (result.to && result.to !== (convo.delivery_phone ?? convo.phone)) {
+    // O retry entregou num formato alternativo → memoriza em delivery_phone.
+    // phone fica intacta: é o wa_id de entrada; mudar quebraria o lookup da
+    // próxima mensagem (conversa duplicada, boas-vindas de novo, IA por cima
+    // de atendimento humano). Best-effort: se a coluna ainda não existir
+    // (migration pendente), só loga — o retry por envio continua cobrindo.
+    const { error } = await supabase
+      .from('whatsapp_conversations')
+      .update({ delivery_phone: result.to })
+      .eq('id', convo.id);
+    if (error) {
+      console.warn('delivery_phone não salvo (rode supabase db push):', error.message);
+    } else {
+      convo.delivery_phone = result.to;
+    }
+  }
+  const content = result.ok ? text : `[NAO ENTREGUE] ${text}`;
+  await saveMessage(supabase, convo.id, 'assistant', content, null);
+}
+
+// Boas-vindas do primeiro contato: UMA mensagem interativa com 3 botões de
+// ação rápida. Se o envio interativo falhar, cai para texto simples.
+async function sendWelcome(
+  supabase: SupabaseClient,
+  convo: DeliverConvo,
+  to: string,
+) {
+  // body.text de mensagem interativa tem limite de 1024 chars na Meta.
+  const welcome = (await buildWelcome(supabase)).slice(0, 1024);
+  const dest = convo.delivery_phone || to;
+
+  let result = await sendMessage(dest, {
+    type: 'interactive',
+    interactive: {
+      type: 'button',
+      body: { text: welcome },
+      action: {
+        buttons: [
+          { type: 'reply', reply: { id: 'ver_produtos', title: 'Ver produtos' } },
+          { type: 'reply', reply: { id: 'falar_vendedor', title: 'Falar com vendedor' } },
+          { type: 'reply', reply: { id: 'nossa_loja', title: 'Nossa loja' } },
+        ],
+      },
+    },
+  });
+
+  if (!result.ok) {
+    // Interativa recusada (conta/número sem suporte etc.) → manda como texto.
+    logGraphError('whatsapp-webhook boas-vindas interativa', result);
+    result = await sendText(dest, welcome);
+  }
+  await recordDelivery(supabase, convo, welcome, result);
+}
+
+// Cliques nos botões da boas-vindas — respostas determinísticas, sem IA.
+// Retorna true se o clique foi tratado; false deixa seguir o fluxo normal.
+async function handleButtonClick(
+  supabase: SupabaseClient,
+  convo: DeliverConvo & { customer_name: string | null },
+  msg: IncomingMessage,
+): Promise<boolean> {
+  switch (msg.buttonId) {
+    case 'ver_produtos': {
+      const text =
+        `Nosso catálogo completo está no site, com preço e estoque atualizados:\n${SITE_URL}\n\n` +
+        'Me diga o que você procura (bike, peça ou acessório) que eu te ajudo a escolher.';
+      await deliver(supabase, convo, msg.from, text);
+      return true;
+    }
+    case 'nossa_loja': {
+      const { data } = await supabase
+        .from('store_settings')
+        .select('store_name, address, city, state, working_hours, whatsapp, contact_email')
+        .limit(1)
+        .maybeSingle();
+      const endereco = [data?.address, data?.city, data?.state].filter(Boolean).join(', ');
+      const parts = [`*${data?.store_name || 'Daniel Bike Shop'}*`];
+      if (endereco) parts.push(`Endereço: ${endereco}`);
+      if (data?.working_hours) parts.push(`Horário: ${data.working_hours}`);
+      if (data?.whatsapp) parts.push(`WhatsApp: ${data.whatsapp}`);
+      if (data?.contact_email) parts.push(`E-mail: ${data.contact_email}`);
+      parts.push(`Site: ${SITE_URL}`);
+      await deliver(supabase, convo, msg.from, parts.join('\n'));
+      return true;
+    }
+    case 'falar_vendedor': {
+      // Mesma lógica de escalar da ferramenta da IA (status='human' + aviso ao dono).
+      await escalarHumano(supabase, convo, 'Cliente clicou em "Falar com vendedor" na boas-vindas');
+      const text =
+        'Claro! Já chamei um vendedor da equipe — uma pessoa de verdade vai te responder por aqui em breve. 😊';
+      await deliver(supabase, convo, msg.from, text);
+      return true;
+    }
+    default:
+      return false; // botão desconhecido → segue o fluxo normal
   }
 }
 
@@ -503,10 +646,11 @@ async function escalarHumano(
   // Avisa o dono/atendente, se houver um número configurado.
   const owner = Deno.env.get('WHATSAPP_OWNER_NUMBER');
   if (owner) {
-    await sendText(
+    const aviso = await sendText(
       owner,
       `Atendimento humano solicitado.\nCliente: ${convo.customer_name || convo.phone}\nMotivo: ${motivo || 'não informado'}`,
-    ).catch(() => {});
+    );
+    if (!aviso.ok) logGraphError('whatsapp-webhook aviso ao dono', aviso);
   }
 
   return JSON.stringify({
@@ -686,6 +830,8 @@ function extractMessages(payload: any): IncomingMessage[] {
           name: nameByWaId[m?.from],
           type: m?.type ?? 'unknown',
           text: text ?? '',
+          // id do botão clicado (respostas dos botões da boas-vindas)
+          buttonId: m?.interactive?.button_reply?.id ?? null,
         });
       }
     }
@@ -693,49 +839,7 @@ function extractMessages(payload: any): IncomingMessage[] {
   return out.filter((m) => m.from && m.waId);
 }
 
-async function callGraph(body: Record<string, unknown>) {
-  const token = Deno.env.get('WHATSAPP_TOKEN');
-  const phoneNumberId = Deno.env.get('WHATSAPP_PHONE_NUMBER_ID');
-  if (!token || !phoneNumberId) {
-    console.error('Missing WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID');
-    return;
-  }
-  const resp = await fetch(`${GRAPH_BASE}/${phoneNumberId}/messages`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messaging_product: 'whatsapp', ...body }),
-  });
-  if (!resp.ok) {
-    console.error('Graph API error:', resp.status, await resp.text());
-  }
-}
-
-async function markRead(messageId: string) {
-  await callGraph({ status: 'read', message_id: messageId }).catch(() => {});
-}
-
-async function sendText(to: string, body: string) {
-  for (const chunk of splitMessage(body)) {
-    await callGraph({ to, type: 'text', text: { body: chunk, preview_url: true } });
-  }
-}
-
-// WhatsApp limita o corpo do texto em 4096 chars. Quebra por parágrafos se precisar.
-function splitMessage(text: string, limit = 3500): string[] {
-  if (text.length <= limit) return [text];
-  const chunks: string[] = [];
-  let current = '';
-  for (const para of text.split('\n')) {
-    if ((current + '\n' + para).length > limit) {
-      if (current) chunks.push(current);
-      current = para;
-    } else {
-      current = current ? `${current}\n${para}` : para;
-    }
-  }
-  if (current) chunks.push(current);
-  return chunks;
-}
+// (envio, split de mensagens e marcação de leitura vivem em ../_shared/whatsapp.ts)
 
 // HMAC-SHA256 do corpo cru com o App Secret == header x-hub-signature-256.
 async function verifyMetaSignature(req: Request, rawBody: string, appSecret: string): Promise<boolean> {

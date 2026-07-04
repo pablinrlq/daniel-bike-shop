@@ -71,6 +71,25 @@ No painel do app (WhatsApp → Configuration → Webhook):
 
 Pronto. Mande uma mensagem para o número e o atendente responde.
 
+## A resposta não chega no celular? (modo teste + 9º dígito BR)
+
+Em **modo teste** da Meta, o envio só entrega para números cadastrados na
+*allowed list* do app — e o formato cadastrado pode divergir do `wa_id` que chega
+no webhook (ex.: `5531982100836` com 9 vs `553182100836` sem 9). O envio (módulo
+`_shared/whatsapp.ts`, usado por todas as funções) já trata isso:
+
+- Se a Graph API recusar com **131030** (*recipient not in allowed list*), tenta
+  **uma vez** o formato alternativo com/sem o 9º dígito e, se entregar, memoriza
+  o formato que funciona na coluna `delivery_phone` da conversa (a coluna `phone`
+  segue sendo o `wa_id` de entrada e nunca muda — é a chave de lookup).
+- Toda falha sai no log com código, mensagem e dica (`131030` allowed list,
+  `131047` janela de 24h fechada, `190` token expirado).
+- Mensagens que não foram entregues ficam salvas na conversa com o prefixo
+  **`[NAO ENTREGUE]`** — assim dá para ver no painel o que o cliente não recebeu.
+
+Se mesmo assim não entregar: cadastre o número em *WhatsApp → API Setup → To*
+(allowed list) ou publique o app para sair do modo teste.
+
 ---
 
 ## Escolha do modelo (velocidade × custo × qualidade)
