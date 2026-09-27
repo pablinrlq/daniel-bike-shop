@@ -4,7 +4,7 @@ import Footer from '@/components/Footer';
 import { useProduct, useProducts, type Product } from '@/hooks/useProducts';
 import { Button } from '@/components/ui/button';
 import { useCart } from '@/contexts/CartContext';
-import { ShoppingCart, MessageCircle, ArrowLeft, Truck, Shield, RotateCcw, AlertTriangle } from 'lucide-react';
+import { ShoppingCart, ArrowLeft, Truck, Shield, RotateCcw, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import ProductCard from '@/components/ProductCard';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -15,7 +15,7 @@ import WishlistButton from '@/components/WishlistButton';
 import ProductReviews from '@/components/ProductReviews';
 import ProductImage from '@/components/ProductImage';
 import SEO from '@/components/SEO';
-import BuyLeadDialog from '@/components/BuyLeadDialog';
+import ProductWhatsappActions from '@/components/ProductWhatsappActions';
 import { bestInstallment } from '@/lib/installments';
 
 const SITE_URL = (import.meta.env.VITE_SITE_URL as string | undefined) || 'https://danielbikeshop.com';
@@ -27,7 +27,6 @@ const ProductDetailPage = () => {
   const { addToCart } = useCart();
   const { data: storeSettings } = useStoreSettings();
   const [selectedImage, setSelectedImage] = useState(0);
-  const [leadOpen, setLeadOpen] = useState(false);
 
   const isOutOfStock = product ? product.stock <= 0 : false;
   const isStoreOpen = storeSettings?.is_store_open ?? true;
@@ -99,14 +98,6 @@ const ProductDetailPage = () => {
     toast.success(`${product.name} adicionado ao carrinho!`);
   };
 
-  const handleQueroEsse = () => {
-    if (!canPurchase) {
-      toast.error(isStoreOpen ? 'Produto esgotado' : 'A loja está fechada no momento.');
-      return;
-    }
-    setLeadOpen(true);
-  };
-
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat('pt-BR', {
       style: 'currency',
@@ -135,7 +126,7 @@ const ProductDetailPage = () => {
       />
       <ProductJsonLd product={product} />
       <Header />
-      <main className="flex-1 py-8">
+      <main id="main-content" className="flex-1 py-8">
         <div className="container mx-auto px-4">
           <Link to="/produtos" className="inline-flex items-center gap-2 text-muted-foreground hover:text-primary mb-8">
             <ArrowLeft className="h-4 w-4" />
@@ -261,16 +252,18 @@ const ProductDetailPage = () => {
                 )}
               </div>
 
-              <div className="mt-8 flex flex-wrap gap-3">
-                <Button
-                  size="lg"
-                  onClick={handleQueroEsse}
-                  disabled={!canPurchase}
-                  className="gap-2 bg-[#25D366] hover:bg-[#20BA5A] text-white"
-                >
-                  <MessageCircle className="h-5 w-5" />
-                  {isOutOfStock ? 'Produto Esgotado' : !isStoreOpen ? 'Loja Fechada' : 'Quero esse pelo WhatsApp'}
-                </Button>
+              <ProductWhatsappActions
+                product={{
+                  id: product.id,
+                  slug: product.slug,
+                  name: product.name,
+                  price: product.price,
+                  stock: product.stock,
+                }}
+                className="mt-8"
+              />
+
+              <div className="mt-4 flex flex-wrap gap-3">
                 <Button
                   size="lg"
                   variant="outline"
@@ -322,11 +315,6 @@ const ProductDetailPage = () => {
           )}
         </div>
       </main>
-      <BuyLeadDialog
-        product={{ id: product.id, slug: product.slug, name: product.name, price: product.price }}
-        open={leadOpen}
-        onOpenChange={setLeadOpen}
-      />
       <Footer />
     </div>
   );

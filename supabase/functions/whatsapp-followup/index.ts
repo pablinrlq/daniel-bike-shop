@@ -75,8 +75,8 @@ serve(async (req) => {
       .select('*')
       .limit(1)
       .maybeSingle();
-    const aiEnabled = settings?.whatsapp_ai_enabled ?? true;
-    const followupEnabled = settings?.whatsapp_followup_enabled ?? true;
+    const aiEnabled = settings?.whatsapp_ai_enabled ?? false;
+    const followupEnabled = settings?.whatsapp_followup_enabled ?? false;
     if (!aiEnabled || !followupEnabled) {
       return json({ skipped: 'follow-up desligado' }, 200);
     }

@@ -105,8 +105,8 @@ export const useWhatsappAi = () => {
       const row = data as Record<string, unknown>;
       return {
         id: row.id as string,
-        whatsapp_ai_enabled: (row.whatsapp_ai_enabled as boolean) ?? true,
-        whatsapp_followup_enabled: (row.whatsapp_followup_enabled as boolean) ?? true,
+        whatsapp_ai_enabled: (row.whatsapp_ai_enabled as boolean) ?? false,
+        whatsapp_followup_enabled: (row.whatsapp_followup_enabled as boolean) ?? false,
       };
     },
   });

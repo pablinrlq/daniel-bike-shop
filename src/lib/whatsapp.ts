@@ -10,7 +10,20 @@ export const onlyDigits = (s: string | null | undefined) => (s ?? '').replace(/\
 
 export const resolveWhatsappNumber = (raw: string | null | undefined): string => {
   const digits = onlyDigits(raw);
-  return digits.length >= 10 ? digits : FALLBACK_WHATSAPP;
+  if (digits.length === 10 || digits.length === 11) return `55${digits}`;
+  return digits.length >= 12 ? digits : FALLBACK_WHATSAPP;
+};
+
+export const formatWhatsappDisplay = (raw: string | null | undefined): string => {
+  const resolved = resolveWhatsappNumber(raw);
+  const local = resolved.startsWith('55') ? resolved.slice(2) : resolved;
+  if (local.length === 11) {
+    return `(${local.slice(0, 2)}) ${local.slice(2, 7)}-${local.slice(7)}`;
+  }
+  if (local.length === 10) {
+    return `(${local.slice(0, 2)}) ${local.slice(2, 6)}-${local.slice(6)}`;
+  }
+  return raw || resolved;
 };
 
 interface UserContact {
@@ -43,20 +56,10 @@ export interface ProductLite {
   slug?: string | null;
   name: string;
   price: number;
+  stock?: number;
 }
 
-export interface LeadData {
-  nome: string;
-  cpf: string;
-  celular: string;
-  email: string;
-  profissao: string;
-  renda: string;
-  escolaridade: string;
-  estadoCivil: string;
-  conjugeNome?: string;
-  conjugeCpf?: string;
-}
+export type ProductWhatsappIntent = 'availability' | 'quote' | 'financing' | 'seller';
 
 const contactBlock = (contact: UserContact): string[] => {
   const lines: string[] = [];
@@ -71,61 +74,69 @@ const contactBlock = (contact: UserContact): string[] => {
   return lines;
 };
 
-/** Mensagem para "Quero esse produto" (1 produto). */
-export const buildProductMessage = (product: ProductLite, contact: UserContact): string => {
+const productBlock = (product: ProductLite): string[] => {
   const url = buildOriginUrl(`/produto/${product.slug || product.id}`);
-  const lines = [
-    'Olá! Tenho interesse neste produto:',
-    '',
+  return [
     `*Produto:* ${product.name}`,
     `*Preço:* ${formatPrice(product.price)}`,
     `*Link:* ${url}`,
-    ...contactBlock(contact),
+  ];
+};
+
+const intentCopy: Record<ProductWhatsappIntent, (product: ProductLite) => string[]> = {
+  availability: (product) => [
+    product.stock === 0
+      ? 'Olá! Vi este produto no site e gostaria de saber a previsão de reposição:'
+      : 'Olá! Vi este produto no site e gostaria de confirmar a disponibilidade:',
+    '',
+    ...productBlock(product),
+    '',
+    product.stock === 0
+      ? 'Quando ele deve voltar ao estoque?'
+      : 'Está disponível para retirada ou entrega? Qual é o prazo?',
+  ],
+  quote: (product) => [
+    'Olá! Gostaria de pedir um orçamento para este produto:',
+    '',
+    ...productBlock(product),
+    '',
+    'Pode me enviar o valor final e as opções de entrega ou retirada?',
+  ],
+  financing: (product) => [
+    'Olá! Gostaria de saber as opções de parcelamento ou financiamento deste produto:',
+    '',
+    ...productBlock(product),
+    '',
+    'Quais condições estão disponíveis? Se precisar, envio meus dados diretamente por aqui.',
+  ],
+  seller: (product) => [
+    'Olá! Quero falar com um vendedor sobre este produto:',
+    '',
+    ...productBlock(product),
     '',
     'Pode me ajudar?',
-  ];
+  ],
+};
+
+/** Mensagem de produto com uma intenção explícita para agilizar o atendimento. */
+export const buildProductIntentMessage = (
+  product: ProductLite,
+  intent: ProductWhatsappIntent,
+  contact: UserContact = {},
+): string => {
+  const lines = intentCopy[intent](product);
+  lines.splice(lines.length - 1, 0, ...contactBlock(contact));
   return lines.join('\n');
 };
 
-/**
- * Mensagem do "Quero esse" com os dados do cliente — facilita o atendimento
- * e a análise de crédito/financiamento pro vendedor.
- */
-export const buildLeadMessage = (product: ProductLite, lead: LeadData): string => {
-  const url = buildOriginUrl(`/produto/${product.slug || product.id}`);
-  const lines = [
-    'Olá! Quero *financiar* este produto:',
-    '',
-    `*Produto:* ${product.name}`,
-    `*Preço:* ${formatPrice(product.price)}`,
-    `*Link:* ${url}`,
-    '',
-    '📝 *DADOS PESSOAIS*',
-    `Nome completo: ${lead.nome}`,
-    `CPF: ${lead.cpf}`,
-    `Celular: ${lead.celular}`,
-    `E-mail: ${lead.email}`,
-    '',
-    '💼 *INFORMAÇÕES PROFISSIONAIS*',
-    `Profissão: ${lead.profissao}`,
-    `Renda Bruta Mensal: ${lead.renda}`,
-    `Escolaridade: ${lead.escolaridade}`,
-    '',
-    '❤️ *ESTADO CIVIL*',
-    `Estado Civil: ${lead.estadoCivil}`,
-  ];
-  if (lead.conjugeNome?.trim() || lead.conjugeCpf?.trim()) {
-    lines.push(`Nome do cônjuge: ${lead.conjugeNome ?? ''}`);
-    lines.push(`CPF do cônjuge: ${lead.conjugeCpf ?? ''}`);
-  }
-  lines.push('', 'Pode me ajudar?');
-  return lines.join('\n');
-};
+/** Compatibilidade com os pontos antigos que usam a ação genérica de produto. */
+export const buildProductMessage = (product: ProductLite, contact: UserContact): string =>
+  buildProductIntentMessage(product, 'seller', contact);
 
 /** Mensagem para o carrinho cheio. */
 export const buildCartMessage = (items: CartItem[], contact: UserContact): string => {
   const subtotal = items.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
-  const lines = ['Olá! Quero finalizar a compra destes produtos:', ''];
+  const lines = ['Olá! Vim pelo carrinho do site e quero finalizar a compra destes produtos:', ''];
   items.forEach((item, index) => {
     lines.push(`${index + 1}. *${item.product.name}*`);
     lines.push(
@@ -135,10 +146,33 @@ export const buildCartMessage = (items: CartItem[], contact: UserContact): strin
     );
   });
   lines.push('', `*Subtotal: ${formatPrice(subtotal)}*`);
-  lines.push(...contactBlock(contact));
+  lines.push(`*Origem:* ${buildOriginUrl('/carrinho')}`);
+  if (contact.name) lines.push('', `*Cliente:* ${contact.name}`);
   lines.push('', 'Como combinamos o pagamento e a entrega?');
   return lines.join('\n');
 };
 
 export const buildWhatsappUrl = (number: string, message: string): string =>
   `https://wa.me/${number}?text=${encodeURIComponent(message)}`;
+
+/** Mensagem contextual do botão flutuante, conforme a página em que o cliente está. */
+export const buildPageMessage = (pathname: string, search = ''): string => {
+  const pageUrl = buildOriginUrl(`${pathname}${search}`);
+
+  if (pathname.startsWith('/produto/')) {
+    return ['Olá! Estou vendo este produto no site:', pageUrl, '', 'Pode me ajudar com ele?'].join('\n');
+  }
+  if (pathname === '/produtos') {
+    return [
+      'Olá! Estou navegando pelo catálogo da Daniel Bike Shop e quero ajuda para escolher.',
+      pageUrl,
+      '',
+      'Posso contar o que estou procurando?',
+    ].join('\n');
+  }
+  if (pathname === '/carrinho') {
+    return ['Olá! Estou no carrinho do site e preciso de ajuda para concluir minha compra.', pageUrl].join('\n');
+  }
+
+  return ['Olá! Vim pelo site da Daniel Bike Shop e quero uma ajuda.', pageUrl].join('\n');
+};

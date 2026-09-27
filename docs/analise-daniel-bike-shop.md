@@ -1,4 +1,8 @@
-# Análise — Daniel Bike Shop (e-commerce, frete e atendimento com IA)
+# Análise — Daniel Bike Shop (documento histórico)
+
+> **Atualização:** o atendimento automático descrito abaixo foi desativado.
+> A estratégia vigente usa apenas links de WhatsApp com mensagens contextuais;
+> o atendimento é continuado por um vendedor da loja.
 
 Documento de análise e recomendações. Não é código de produção — é o "mapa" do
 que melhorar e como. Datado de 2026-06-16.

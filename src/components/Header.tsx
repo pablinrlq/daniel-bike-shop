@@ -76,7 +76,6 @@ const Header = () => {
               height={64}
               loading="eager"
               decoding="async"
-              fetchPriority="high"
               className="h-12 md:h-16 w-auto"
             />
           </Link>

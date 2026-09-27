@@ -1,4 +1,9 @@
-# Atendente de WhatsApp com IA (Claude)
+# Atendente de WhatsApp com IA (legado e desativado)
+
+> **Não usar no fluxo atual da Daniel Bike Shop.** O WhatsApp agora é um canal
+> de conversão humana por links `wa.me`, sem chatbot, IA ou respostas automáticas.
+> A migration `20260927000000_disable_whatsapp_automation.sql` desliga este
+> atendente e o follow-up. Este diretório foi mantido apenas como histórico.
 
 Edge function que faz o WhatsApp da loja responder **sozinho**, como um atendente:
 entende a pergunta, **consulta preço e estoque reais no catálogo** (que vem do Bling),

@@ -40,7 +40,6 @@ const AdminUsersPage = lazy(() => import("./pages/admin/AdminUsersPage"));
 const AdminBlingPage = lazy(() => import("./pages/admin/AdminBlingPage"));
 const AdminSettingsPage = lazy(() => import("./pages/admin/AdminSettingsPage"));
 const AdminServicesPage = lazy(() => import("./pages/admin/AdminServicesPage"));
-const AdminFaqsPage = lazy(() => import("./pages/admin/AdminFaqsPage"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -96,7 +95,7 @@ const App = () => (
                       <Route path="stock" element={<AdminStockPage />} />
                       <Route path="orders" element={<AdminOrdersPage />} />
                       <Route path="services" element={<AdminServicesPage />} />
-                      <Route path="atendente-ia" element={<AdminFaqsPage />} />
+                      <Route path="atendente-ia" element={<Navigate to="/admin/settings" replace />} />
                       <Route path="banners" element={<AdminBannersPage />} />
                       <Route path="coupons" element={<AdminCouponsPage />} />
                       <Route path="reviews" element={<AdminReviewsPage />} />

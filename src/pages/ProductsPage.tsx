@@ -103,13 +103,13 @@ const ProductsPage = () => {
         <div className="container mx-auto px-4">
           <div className="mb-8">
             <h1 className="text-3xl md:text-4xl font-bold">Nossos Produtos</h1>
-            <p className="text-muted-foreground mt-2">
+            <div className="text-muted-foreground mt-2">
               {isLoading ? (
                 <Skeleton className="h-5 w-40 inline-block" />
               ) : (
                 `${filteredProducts.length} produto${filteredProducts.length !== 1 ? 's' : ''} encontrado${filteredProducts.length !== 1 ? 's' : ''}`
               )}
-            </p>
+            </div>
           </div>
 
           {/* Filters */}

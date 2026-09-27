@@ -116,17 +116,13 @@ supabase functions deploy check-admin-exists
 supabase functions deploy create-first-admin
 supabase functions deploy admin-create-user
 supabase functions deploy admin-delete-user
-supabase functions deploy whatsapp-webhook
 supabase functions deploy service-notify
 ```
 
-> **Atendente de WhatsApp com IA (Claude):** a função `whatsapp-webhook` faz o
-> WhatsApp responder sozinho, consultando preço/estoque reais. A `service-notify`
-> avisa o cliente no WhatsApp quando o status de um serviço muda (aba **Serviços**
-> no admin). O passo a passo completo (Meta Cloud API, segredos, escolha de modelo,
-> template de notificação) está em
-> [`supabase/functions/whatsapp-webhook/README.md`](./supabase/functions/whatsapp-webhook/README.md).
-> Gerencie tudo no admin: **Atendente IA** (liga/desliga + FAQ) e **Serviços**.
+> **WhatsApp de vendas:** os CTAs do site usam links `wa.me` e não exigem Edge
+> Function, webhook ou IA. Configure apenas o número da loja em **Configurações →
+> Contato**. Veja [WHATSAPP-SETUP.md](./WHATSAPP-SETUP.md). A função
+> `service-notify` é separada e serve somente para avisos de status da oficina.
 
 ### 5.2) Secrets
 

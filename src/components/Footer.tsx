@@ -1,11 +1,22 @@
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { MapPin, Phone, Instagram } from 'lucide-react';
 import logo from '@/assets/logo.png';
 import Newsletter from '@/components/Newsletter';
 import { useNavCategories } from '@/hooks/useProducts';
+import { useStoreSettings } from '@/hooks/useStoreSettings';
+import {
+  buildPageMessage,
+  buildWhatsappUrl,
+  formatWhatsappDisplay,
+  resolveWhatsappNumber,
+} from '@/lib/whatsapp';
 
 const Footer = () => {
   const { data: navCategories } = useNavCategories();
+  const { data: settings } = useStoreSettings();
+  const { pathname, search } = useLocation();
+  const whatsappNumber = resolveWhatsappNumber(settings?.whatsapp);
+  const whatsappUrl = buildWhatsappUrl(whatsappNumber, buildPageMessage(pathname, search));
   return (
     <footer className="bg-card border-t border-border">
       <div className="container mx-auto px-4 py-12">
@@ -65,13 +76,13 @@ const Footer = () => {
               </li>
               <li>
                 <a 
-                  href="https://wa.me/5531995326386" 
+                  href={whatsappUrl}
                   target="_blank" 
                   rel="noopener noreferrer"
                   className="flex items-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors"
                 >
                   <Phone className="h-4 w-4" />
-                  <span>(31) 99532-6386</span>
+                  <span>{formatWhatsappDisplay(settings?.whatsapp)}</span>
                 </a>
               </li>
             </ul>

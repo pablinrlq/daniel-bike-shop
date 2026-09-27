@@ -11,6 +11,13 @@ E-commerce especializado em bicicletas, peças e acessórios — Belo Horizonte/
 - Mercado Pago (Pix + cartão + webhook)
 - Resend (e-mail transacional)
 - Integração Bling (ERP — produtos, pedidos, NF-e)
+- WhatsApp click-to-chat com mensagens contextuais de produto, catálogo e carrinho
+
+## WhatsApp
+
+O site usa o WhatsApp como canal de conversão humana: os botões abrem o número
+configurado da loja com produto, preço, assunto e origem já preenchidos. Não há
+chatbot nem resposta automática ativa. Veja [WHATSAPP-SETUP.md](./WHATSAPP-SETUP.md).
 
 ## Setup completo (Supabase novo, MP, Resend, Vercel)
 

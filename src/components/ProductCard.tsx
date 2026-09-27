@@ -27,10 +27,6 @@ const ProductCard = ({ product }: ProductCardProps) => {
   const canPurchase = isStoreOpen && !isOutOfStock;
 
   const handleQueroEsse = () => {
-    if (!canPurchase) {
-      toast.error(isStoreOpen ? 'Produto esgotado' : 'A loja está fechada no momento.');
-      return;
-    }
     setLeadOpen(true);
   };
 
@@ -150,11 +146,10 @@ const ProductCard = ({ product }: ProductCardProps) => {
             <Button
               size="sm"
               onClick={handleQueroEsse}
-              disabled={!canPurchase}
               className="flex-1 gap-1 bg-[#25D366] hover:bg-[#20BA5A] text-white"
             >
               <MessageCircle className="h-4 w-4" />
-              {isOutOfStock ? 'Esgotado' : 'Quero esse'}
+              Consultar
             </Button>
           </div>
         </div>
@@ -182,6 +177,18 @@ const ProductCard = ({ product }: ProductCardProps) => {
           <span className="mt-1 text-xs text-muted-foreground">ou {installment.label}</span>
         )}
 
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={handleQueroEsse}
+          className="mt-3 w-full gap-1.5 border-[#25D366]/40 text-foreground hover:bg-[#25D366]/10 sm:hidden"
+          aria-label={`Consultar ${product.name} pelo WhatsApp`}
+        >
+          <MessageCircle className="h-4 w-4 text-[#25D366]" />
+          Consultar no WhatsApp
+        </Button>
+
         {isOutOfStock && (
           <StockAlertButton
             productId={product.id}
@@ -192,7 +199,13 @@ const ProductCard = ({ product }: ProductCardProps) => {
       </div>
 
       <BuyLeadDialog
-        product={{ id: product.id, slug: product.slug, name: product.name, price: product.price }}
+        product={{
+          id: product.id,
+          slug: product.slug,
+          name: product.name,
+          price: product.price,
+          stock: product.stock,
+        }}
         open={leadOpen}
         onOpenChange={setLeadOpen}
       />

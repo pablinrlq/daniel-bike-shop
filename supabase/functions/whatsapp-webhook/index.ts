@@ -228,7 +228,8 @@ serve(async (req) => {
     .select('whatsapp_ai_enabled')
     .limit(1)
     .maybeSingle();
-  const aiEnabled = settings?.whatsapp_ai_enabled ?? true;
+  // Opt-in explícito: sem configuração válida, o WhatsApp nunca responde sozinho.
+  const aiEnabled = settings?.whatsapp_ai_enabled ?? false;
 
   // FAQs ativas vão no system prompt (cacheado) — atende dúvidas de frete/troca/
   // garantia etc. com rapidez e sem chute.
