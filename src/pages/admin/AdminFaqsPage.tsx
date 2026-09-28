@@ -78,14 +78,14 @@ const AdminFaqsPage = () => {
           <Bot className="h-6 w-6" /> Atendente IA
         </h1>
         <p className="text-sm text-muted-foreground">
-          Controle o atendente do WhatsApp e ensine respostas (FAQ). O que você escrever aqui é
-          usado pelo atendente na hora de responder.
+          Controle o atendente do site e das integrações de WhatsApp. O que você escrever nas FAQs
+          é usado pela IA na hora de responder.
         </p>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Atendente automático no WhatsApp</CardTitle>
+          <CardTitle>Atendente automático</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="flex items-center gap-3">
@@ -97,8 +97,8 @@ const AdminFaqsPage = () => {
             />
             <Label htmlFor="ai-toggle" className="cursor-pointer">
               {ai?.whatsapp_ai_enabled ?? false
-                ? 'Ligado — a IA responde os clientes automaticamente'
-                : 'Desligado — ninguém recebe resposta automática'}
+                ? 'Ligado — a IA responde no site e nos canais conectados'
+                : 'Desligado — a IA não responde em nenhum canal'}
             </Label>
           </div>
           <div className="mt-5 pt-5 border-t flex items-center gap-3">
@@ -115,9 +115,9 @@ const AdminFaqsPage = () => {
             </Label>
           </div>
           <p className="text-xs text-muted-foreground mt-3">
-            A resposta automática só acontece depois que o cliente envia uma mensagem. O follow-up
-            proativo é uma opção separada e pode continuar desligado. Quando você assume uma
-            conversa pelo WhatsApp, a IA fica quieta naquele contato até a equipe liberar de novo.
+            A IA só responde depois que o cliente envia uma mensagem. O chat do site não depende da
+            Meta. A ponte por QR é um serviço separado, não oficial, e deve rodar em um servidor
+            próprio sempre ligado. O follow-up proativo pode continuar desligado.
           </p>
         </CardContent>
       </Card>

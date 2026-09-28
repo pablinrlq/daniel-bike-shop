@@ -45,6 +45,11 @@ verify_jwt = false
 [functions.whatsapp-webhook]
 verify_jwt = false
 
+# Chat público do site e endpoint autenticado da ponte WhatsApp QR.
+# A função valida origem/sessão no site e x-bridge-secret na ponte.
+[functions.store-assistant]
+verify_jwt = false
+
 # Notificação de serviço no WhatsApp — chamada pelo painel (admin/editor logado).
 # A própria função revalida o papel admin/editor.
 [functions.service-notify]

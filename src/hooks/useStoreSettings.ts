@@ -17,6 +17,7 @@ export interface StoreSettings {
   facebook_url: string | null;
   currency: string;
   is_store_open: boolean;
+  whatsapp_ai_enabled: boolean;
 }
 
 export const useStoreSettings = () => {

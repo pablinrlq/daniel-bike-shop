@@ -41,6 +41,7 @@ const AdminBlingPage = lazy(() => import("./pages/admin/AdminBlingPage"));
 const AdminSettingsPage = lazy(() => import("./pages/admin/AdminSettingsPage"));
 const AdminServicesPage = lazy(() => import("./pages/admin/AdminServicesPage"));
 const AdminFaqsPage = lazy(() => import("./pages/admin/AdminFaqsPage"));
+const StoreChat = lazy(() => import("./components/StoreChat"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -110,6 +111,9 @@ const App = () => (
                   </Routes>
                 </Suspense>
                 <WhatsAppButton />
+                <Suspense fallback={null}>
+                  <StoreChat />
+                </Suspense>
               </BrowserRouter>
             </CartProvider>
           </WishlistProvider>

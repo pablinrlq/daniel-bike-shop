@@ -13,6 +13,7 @@ E-commerce especializado em bicicletas, peças e acessórios — Belo Horizonte/
 - Integração Bling (ERP — produtos, pedidos, NF-e)
 - WhatsApp click-to-chat com mensagens contextuais de produto, catálogo e carrinho
 - Atendente reativo de WhatsApp com IA, FAQs e catálogo via Supabase Edge Functions
+- Chat de IA no próprio site, com encaminhamento para vendedor
 
 ## WhatsApp
 
@@ -20,6 +21,10 @@ Os botões abrem o número configurado da loja com produto, preço, assunto e
 origem já preenchidos. Quando o cliente envia a mensagem, o atendente reativo
 pode responder dúvidas usando FAQs, catálogo e dados da loja. O follow-up
 proativo permanece separado e desligado. Veja [WHATSAPP-SETUP.md](./WHATSAPP-SETUP.md).
+
+O mesmo catálogo/FAQ também alimenta o chat flutuante do site pela Edge Function
+`store-assistant`. A ponte opcional por QR Code está isolada em
+`services/whatsapp-qr-bridge` e exige um processo Node.js sempre ligado.
 
 ## Setup completo (Supabase novo, MP, Resend, Vercel)
 

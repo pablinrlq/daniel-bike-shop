@@ -55,6 +55,29 @@ Para funcionar em produção, a Meta Cloud API deve apontar o webhook para a Edg
 Function `whatsapp-webhook`, com os secrets `WHATSAPP_TOKEN`,
 `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN` e `ANTHROPIC_API_KEY`.
 
+## Chat no site
+
+O componente `StoreChat` chama a Edge Function `store-assistant`, que usa o
+mesmo catálogo, FAQs e configurações da loja. A chave da Anthropic permanece no
+servidor. A função valida a origem, limita mensagens por sessão e guarda somente
+o histórico necessário nas tabelas de conversa já protegidas por RLS.
+
+## Ponte por QR Code (não oficial)
+
+O serviço em `services/whatsapp-qr-bridge` usa Baileys para conectar um aparelho
+do WhatsApp Web. Ele só responde mensagens individuais recebidas, ignora grupos
+e não faz disparos. Por depender de protocolo não oficial, pode desconectar ou
+causar restrições; mantenha a Cloud API como caminho recomendado.
+
+A ponte não roda na Vercel/Supabase Edge Functions porque precisa manter um
+WebSocket e arquivos de sessão continuamente. Hospede-a em computador ou VPS
+sempre ligado, com volume persistente. Antes de iniciar:
+
+1. Crie um segredo longo e configure-o como `QR_BRIDGE_SECRET` no Supabase.
+2. Use o mesmo valor no `.env` do serviço.
+3. Defina `BRIDGE_ENABLED=true` e `BRIDGE_ACKNOWLEDGE_UNOFFICIAL_RISK=true`.
+4. Execute `npm ci && npm start` e escaneie o QR mostrado no terminal.
+
 ## Checklist rápido
 
 1. Abra um produto no celular.
