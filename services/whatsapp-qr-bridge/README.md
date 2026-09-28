@@ -35,6 +35,20 @@ Escaneie o QR exibido no terminal em **WhatsApp → Aparelhos conectados →
 Conectar aparelho**. Nunca publique o diretório `data/`: ele contém a sessão
 completa do WhatsApp.
 
+## Instalação neste computador (GNOME/Linux)
+
+```sh
+npm run setup:local
+npm run start:local
+```
+
+O primeiro comando cria uma chave aleatória e guarda configuração, sessão,
+log e QR em `~/.local/share/daniel-bike-shop-whatsapp-bridge/`, com permissões
+privadas. Ele também registra a ponte em `~/.config/autostart/`, para iniciar
+automaticamente ao entrar na sessão do computador, usando uma cópia privada do
+Node para não depender do ambiente do Codex. A chave em texto puro não é salva
+no repositório; somente o hash deve ser cadastrado no Supabase.
+
 ## Assumir uma conversa
 
 O robô pausa automaticamente quando a IA transfere para humano. O vendedor

@@ -1,4 +1,5 @@
-import { mkdir } from 'node:fs/promises';
+import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -7,12 +8,15 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import qrcode from 'qrcode-terminal';
+import QRCodeMatrix from 'qrcode-terminal/vendor/QRCode/index.js';
+import QRErrorCorrectLevel from 'qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel.js';
 
 const enabled = process.env.BRIDGE_ENABLED === 'true';
 const riskAccepted = process.env.BRIDGE_ACKNOWLEDGE_UNOFFICIAL_RISK === 'true';
 const assistantUrl = process.env.SUPABASE_ASSISTANT_URL || '';
 const bridgeSecret = process.env.QR_BRIDGE_SECRET || '';
 const authDir = process.env.WA_AUTH_DIR || './data/auth';
+const qrImagePath = process.env.QR_IMAGE_PATH || '';
 const debounceMs = Math.max(500, Number(process.env.MESSAGE_DEBOUNCE_MS || 1400));
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 const pending = new Map();
@@ -63,6 +67,27 @@ async function callAssistant(sessionId, payload) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || `Assistente respondeu HTTP ${response.status}`);
   return data;
+}
+
+async function saveQrImage(qr) {
+  if (!qrImagePath) return;
+  await mkdir(dirname(qrImagePath), { recursive: true });
+  const matrix = new QRCodeMatrix(-1, QRErrorCorrectLevel.L);
+  matrix.addData(qr);
+  matrix.make();
+  const margin = 4;
+  const moduleCount = matrix.getModuleCount();
+  const size = moduleCount + margin * 2;
+  const modules = [];
+  for (let row = 0; row < moduleCount; row += 1) {
+    for (let column = 0; column < moduleCount; column += 1) {
+      if (matrix.isDark(row, column)) modules.push(`M${column + margin} ${row + margin}h1v1h-1z`);
+    }
+  }
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges"><rect width="100%" height="100%" fill="white"/><path d="${modules.join('')}" fill="black"/></svg>`;
+  await writeFile(qrImagePath, svg, { mode: 0o600 });
+  await chmod(qrImagePath, 0o600);
+  logger.info({ qrImagePath }, 'QR salvo como imagem');
 }
 
 async function handleHumanCommand(remoteJid, text) {
@@ -119,8 +144,14 @@ async function connect() {
     if (qr) {
       process.stdout.write('\nEscaneie este QR no WhatsApp da loja: Aparelhos conectados → Conectar aparelho.\n\n');
       qrcode.generate(qr, { small: true });
+      void saveQrImage(qr).catch((error) =>
+        logger.error({ error: error.message }, 'Falha ao salvar imagem do QR'),
+      );
     }
-    if (connection === 'open') logger.info('WhatsApp conectado. Ponte reativa pronta.');
+    if (connection === 'open') {
+      void rm(qrImagePath, { force: true }).catch(() => undefined);
+      logger.info('WhatsApp conectado. Ponte reativa pronta.');
+    }
     if (connection !== 'close') return;
 
     const code = disconnectCode(lastDisconnect?.error);

@@ -8,7 +8,9 @@
   },
   "scripts": {
     "start": "node src/index.mjs",
-    "check": "node --check src/index.mjs"
+    "start:local": "node src/run-local.mjs",
+    "setup:local": "node scripts/setup-local.mjs",
+    "check": "node --check src/index.mjs && node --check src/run-local.mjs && node --check scripts/setup-local.mjs"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "6.7.24",

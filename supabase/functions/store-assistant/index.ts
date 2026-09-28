@@ -136,11 +136,41 @@ async function sha256(value: string): Promise<string> {
 async function secretsMatch(provided: string, expected: string): Promise<boolean> {
   if (!provided || !expected) return false;
   const [left, right] = await Promise.all([sha256(provided), sha256(expected)]);
+  return constantTimeStringsMatch(left, right);
+}
+
+function constantTimeStringsMatch(left: string, right: string): boolean {
   let difference = left.length ^ right.length;
   for (let i = 0; i < Math.min(left.length, right.length); i += 1) {
     difference |= left.charCodeAt(i) ^ right.charCodeAt(i);
   }
   return difference === 0;
+}
+
+async function authorizeBridge(
+  supabase: SupabaseClient,
+  provided: string,
+): Promise<'authorized' | 'unauthorized' | 'unconfigured'> {
+  if (!provided) return 'unauthorized';
+
+  const expected = Deno.env.get('QR_BRIDGE_SECRET') || '';
+  if (expected) return (await secretsMatch(provided, expected)) ? 'authorized' : 'unauthorized';
+
+  const { data, error } = await supabase
+    .from('integration_secrets')
+    .select('secret_hash')
+    .eq('name', 'qr_bridge')
+    .maybeSingle();
+  if (error) {
+    console.error('store-assistant: bridge secret lookup failed');
+    return 'unconfigured';
+  }
+  if (!data?.secret_hash) return 'unconfigured';
+
+  const providedHash = await sha256(provided);
+  return constantTimeStringsMatch(providedHash, String(data.secret_hash))
+    ? 'authorized'
+    : 'unauthorized';
 }
 
 function validSiteSession(value: string): boolean {
@@ -174,22 +204,6 @@ Deno.serve(async (req) => {
   const channel: Channel = input.channel === 'whatsapp-qr' ? 'whatsapp-qr' : 'site';
   const rawSessionId = String(input.sessionId || '');
 
-  if (channel === 'site' && (!isSiteRequest(origin) || !validSiteSession(rawSessionId))) {
-    return json({ error: 'Origem ou sessão inválida.' }, 403, origin);
-  }
-
-  if (channel === 'whatsapp-qr') {
-    const expected = Deno.env.get('QR_BRIDGE_SECRET') || '';
-    const provided = req.headers.get('x-bridge-secret') || '';
-    if (!expected) return json({ error: 'Ponte QR ainda não configurada.' }, 503, origin);
-    if (!(await secretsMatch(provided, expected))) {
-      return json({ error: 'Ponte QR não autorizada.' }, 401, origin);
-    }
-    if (!cleanBridgeSession(rawSessionId)) {
-      return json({ error: 'Sessão inválida.' }, 400, origin);
-    }
-  }
-
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
   const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY');
@@ -197,8 +211,26 @@ Deno.serve(async (req) => {
     console.error('store-assistant: missing server secrets');
     return json({ error: 'Atendimento temporariamente indisponível.' }, 503, origin);
   }
-
   const supabase = createClient(supabaseUrl, serviceRoleKey);
+
+  if (channel === 'site' && (!isSiteRequest(origin) || !validSiteSession(rawSessionId))) {
+    return json({ error: 'Origem ou sessão inválida.' }, 403, origin);
+  }
+
+  if (channel === 'whatsapp-qr') {
+    const provided = req.headers.get('x-bridge-secret') || '';
+    const authorization = await authorizeBridge(supabase, provided);
+    if (authorization === 'unconfigured') {
+      return json({ error: 'Ponte QR ainda não configurada.' }, 503, origin);
+    }
+    if (authorization === 'unauthorized') {
+      return json({ error: 'Ponte QR não autorizada.' }, 401, origin);
+    }
+    if (!cleanBridgeSession(rawSessionId)) {
+      return json({ error: 'Sessão inválida.' }, 400, origin);
+    }
+  }
+
   const phoneKey =
     channel === 'site'
       ? `site:${(await sha256(rawSessionId)).slice(0, 48)}`
