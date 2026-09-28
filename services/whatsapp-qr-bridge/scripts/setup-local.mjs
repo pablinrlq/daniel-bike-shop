@@ -13,6 +13,7 @@ const authDir = join(dataDir, 'auth');
 const envPath = join(dataDir, 'bridge.env');
 const localNodePath = join(dataDir, 'node');
 const qrImagePath = join(dataDir, 'latest-qr.svg');
+const qrPngPath = join(dataDir, 'latest-qr.png');
 const logPath = join(dataDir, 'bridge.log');
 const autostartDir = join(configRoot, 'autostart');
 const autostartPath = join(autostartDir, 'daniel-bike-shop-whatsapp-bridge.desktop');
@@ -52,6 +53,7 @@ const envFile = [
   `QR_BRIDGE_SECRET=${secret}`,
   `WA_AUTH_DIR=${authDir}`,
   `QR_IMAGE_PATH=${qrImagePath}`,
+  `QR_PNG_PATH=${qrPngPath}`,
   'MESSAGE_DEBOUNCE_MS=1400',
   'LOG_LEVEL=info',
   '',
@@ -60,7 +62,9 @@ const temporaryEnvPath = `${envPath}.${process.pid}.tmp`;
 await writeFile(temporaryEnvPath, envFile, { mode: 0o600 });
 await rename(temporaryEnvPath, envPath);
 await chmod(envPath, 0o600);
-await copyFile(process.execPath, localNodePath);
+if (resolve(process.execPath) !== resolve(localNodePath)) {
+  await copyFile(process.execPath, localNodePath);
+}
 await chmod(localNodePath, 0o700);
 
 const runnerPath = join(serviceDir, 'src', 'run-local.mjs');
@@ -80,5 +84,5 @@ await writeFile(autostartPath, desktopEntry, { mode: 0o600 });
 
 const secretHash = createHash('sha256').update(secret).digest('hex');
 process.stdout.write(
-  `${JSON.stringify({ secretHash, dataDir, envPath, qrImagePath, logPath, autostartPath, localNodePath })}\n`,
+  `${JSON.stringify({ secretHash, dataDir, envPath, qrImagePath, qrPngPath, logPath, autostartPath, localNodePath })}\n`,
 );
