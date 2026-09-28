@@ -12,12 +12,14 @@ E-commerce especializado em bicicletas, peças e acessórios — Belo Horizonte/
 - Resend (e-mail transacional)
 - Integração Bling (ERP — produtos, pedidos, NF-e)
 - WhatsApp click-to-chat com mensagens contextuais de produto, catálogo e carrinho
+- Atendente reativo de WhatsApp com IA, FAQs e catálogo via Supabase Edge Functions
 
 ## WhatsApp
 
-O site usa o WhatsApp como canal de conversão humana: os botões abrem o número
-configurado da loja com produto, preço, assunto e origem já preenchidos. Não há
-chatbot nem resposta automática ativa. Veja [WHATSAPP-SETUP.md](./WHATSAPP-SETUP.md).
+Os botões abrem o número configurado da loja com produto, preço, assunto e
+origem já preenchidos. Quando o cliente envia a mensagem, o atendente reativo
+pode responder dúvidas usando FAQs, catálogo e dados da loja. O follow-up
+proativo permanece separado e desligado. Veja [WHATSAPP-SETUP.md](./WHATSAPP-SETUP.md).
 
 ## Setup completo (Supabase novo, MP, Resend, Vercel)
 

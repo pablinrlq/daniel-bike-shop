@@ -90,34 +90,34 @@ const AdminFaqsPage = () => {
         <CardContent>
           <div className="flex items-center gap-3">
             <Switch
-              checked={ai?.whatsapp_ai_enabled ?? true}
+              checked={ai?.whatsapp_ai_enabled ?? false}
               disabled={!ai || toggleAi.isPending}
               onCheckedChange={(v) => ai && toggleAi.mutate({ id: ai.id, enabled: v })}
               id="ai-toggle"
             />
             <Label htmlFor="ai-toggle" className="cursor-pointer">
-              {ai?.whatsapp_ai_enabled ?? true
+              {ai?.whatsapp_ai_enabled ?? false
                 ? 'Ligado — a IA responde os clientes automaticamente'
                 : 'Desligado — ninguém recebe resposta automática'}
             </Label>
           </div>
           <div className="mt-5 pt-5 border-t flex items-center gap-3">
             <Switch
-              checked={ai?.whatsapp_followup_enabled ?? true}
+              checked={ai?.whatsapp_followup_enabled ?? false}
               disabled={!ai || toggleFollowup.isPending}
               onCheckedChange={(v) => ai && toggleFollowup.mutate({ id: ai.id, enabled: v })}
               id="followup-toggle"
             />
             <Label htmlFor="followup-toggle" className="cursor-pointer">
-              {ai?.whatsapp_followup_enabled ?? true
+              {ai?.whatsapp_followup_enabled ?? false
                 ? 'Follow-up proativo ligado — a IA reengaja quem veio do site e não fechou'
                 : 'Follow-up proativo desligado'}
             </Label>
           </div>
           <p className="text-xs text-muted-foreground mt-3">
-            Dica: mesmo ligado, quando você assume uma conversa pelo WhatsApp a IA fica quieta
-            naquele contato até a equipe liberar de novo. O follow-up só acontece dentro de 24h
-            (regra do WhatsApp), no máximo 2 vezes por cliente.
+            A resposta automática só acontece depois que o cliente envia uma mensagem. O follow-up
+            proativo é uma opção separada e pode continuar desligado. Quando você assume uma
+            conversa pelo WhatsApp, a IA fica quieta naquele contato até a equipe liberar de novo.
           </p>
         </CardContent>
       </Card>

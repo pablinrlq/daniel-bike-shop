@@ -1,8 +1,9 @@
-# WhatsApp da Daniel Bike Shop — click-to-chat
+# WhatsApp da Daniel Bike Shop — vendas e atendente IA
 
-O site usa o WhatsApp como **canal de conversão humana**. Não é necessário
-Meta Cloud API, webhook, n8n ou modelo de IA: cada CTA abre o WhatsApp da loja
-com uma mensagem pronta, e um vendedor continua o atendimento normalmente.
+Cada CTA abre o WhatsApp da loja com uma mensagem contextual pronta. Depois que
+o cliente envia a mensagem, o webhook da Meta entrega a conversa ao atendente
+reativo no Supabase, que consulta FAQs, catálogo e dados da loja. Um vendedor
+pode assumir o atendimento normalmente a qualquer momento.
 
 ## Configuração
 
@@ -39,16 +40,20 @@ Dados pessoais e dados de financiamento, como e-mail, telefone, CPF e renda,
 não são colocados na URL. Se forem necessários, o cliente os envia diretamente
 durante a conversa.
 
-## Sem respostas automáticas
+## Respostas automáticas
 
-A migration `20260927000000_disable_whatsapp_automation.sql` mantém
-`whatsapp_ai_enabled` e `whatsapp_followup_enabled` desativados. A rota antiga
-do painel do atendente automático não aparece mais no menu.
+A migration `20260928061134_enable_reactive_whatsapp_ai.sql` reativa
+`whatsapp_ai_enabled`, mantendo `whatsapp_followup_enabled` desligado. Portanto,
+o robô responde perguntas recebidas, mas não inicia conversas nem envia lembretes
+sozinho.
 
-As Edge Functions antigas permanecem no repositório apenas como histórico e
-não devem ser publicadas. Caso já tenham sido implantadas em um ambiente,
-aplique as migrations mais recentes para garantir que os toggles fiquem
-desligados.
+No painel, abra **Atendente IA** para ligar/desligar as respostas e cadastrar as
+perguntas frequentes. Em **Configurações**, preencha endereço e horário de
+funcionamento; o robô usa esses campos e não deve inventar informações ausentes.
+
+Para funcionar em produção, a Meta Cloud API deve apontar o webhook para a Edge
+Function `whatsapp-webhook`, com os secrets `WHATSAPP_TOKEN`,
+`WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN` e `ANTHROPIC_API_KEY`.
 
 ## Checklist rápido
 
